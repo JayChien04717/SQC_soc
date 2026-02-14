@@ -48,13 +48,19 @@ class BaseExperiment:
     X_SAVE_UNIT: str = ""      # e.g. "Hz", "us", "DAC unit"
     X_SAVE_SCALE: float = 1.0  # multiply factor for unit conversion (e.g. 1e6 for MHz→Hz)
 
+    # ── y-axis save info (optional, for 2D experiments) ──
+    Y_SAVE_NAME: str = ""
+    Y_SAVE_UNIT: str = ""
+    Y_SAVE_SCALE: float = 1.0
+
     def __init__(self, soc, soccfg, config):
         self.soc = soc
         self.soccfg = soccfg
         self.cfg = config
         self.iqdata = None
         self.fit_params = None
-        self._sweep_vals = None  # sweep axis values
+        self._sweep_vals = None    # sweep axis values (x)
+        self._sweep_vals_y = None  # sweep axis values (y, for 2D)
 
     # ══════════════════════════════════════════════
     # Unified entry point
@@ -142,13 +148,26 @@ class BaseExperiment:
 
         comment = self._save_comment(dict_val)
 
+        # Construct x_info
+        x_info = {
+            "name": self.X_SAVE_NAME,
+            "unit": self.X_SAVE_UNIT,
+            "values": self._sweep_vals * self.X_SAVE_SCALE,
+        }
+
+        # Construct y_info (optional)
+        y_info = None
+        if self._sweep_vals_y is not None:
+            y_info = {
+                "name": self.Y_SAVE_NAME,
+                "unit": self.Y_SAVE_UNIT,
+                "values": self._sweep_vals_y * self.Y_SAVE_SCALE,
+            }
+
         hdf5_generator(
             filepath=file_path,
-            x_info={
-                "name": self.X_SAVE_NAME,
-                "unit": self.X_SAVE_UNIT,
-                "values": self._sweep_vals * self.X_SAVE_SCALE,
-            },
+            x_info=x_info,
+            y_info=y_info,
             z_info={"name": "Signal", "unit": "ADC unit", "values": self.iqdata},
             comment=comment,
             tag=self.TAG,
