@@ -81,29 +81,53 @@ class BaseExperiment:
         # ── Simulate mode: no hardware needed ──
         if simulate:
             self._sweep_vals = self._mock_sweep_axis(**kwargs)
-            self.iqdata = self._simulate(self._sweep_vals)
+            self._sweep_vals_y = self._mock_sweep_axis_y(**kwargs)
 
-            # Show static plot
-            fig, ax = plt.subplots(figsize=(6, 4))
-            ax.plot(self._sweep_vals, np.abs(self.iqdata), "o-", markersize=4, alpha=0.7)
-            ax.set_xlabel(self.X_LABEL)
-            ax.set_ylabel("ADC Units (Abs)")
-            ax.set_title(f"{self.TITLE_PREFIX} [SIMULATED]")
-            fig.tight_layout()
-            plt.show()
+            if self._sweep_vals_y is not None:
+                # 2D Simulation
+                self.iqdata = self._simulate(self._sweep_vals, self._sweep_vals_y)
+                
+                # Show static plot (2D)
+                fig, ax = plt.subplots(figsize=(6, 5))
+                pcm = ax.pcolormesh(
+                    self._sweep_vals, 
+                    self._sweep_vals_y, 
+                    np.abs(self.iqdata), 
+                    shading='auto'
+                )
+                ax.set_xlabel(self.X_LABEL)
+                ax.set_ylabel(self.Y_LABEL)
+                ax.set_title(f"{self.TITLE_PREFIX} [SIMULATED]")
+                fig.colorbar(pcm, ax=ax, label="ADC Units (Abs)")
+                fig.tight_layout()
+                plt.show()
+                
+            else:
+                # 1D Simulation
+                self.iqdata = self._simulate(self._sweep_vals)
+
+                # Show static plot (1D)
+                fig, ax = plt.subplots(figsize=(6, 4))
+                ax.plot(self._sweep_vals, np.abs(self.iqdata), "o-", markersize=4, alpha=0.7)
+                ax.set_xlabel(self.X_LABEL)
+                ax.set_ylabel("ADC Units (Abs)")
+                ax.set_title(f"{self.TITLE_PREFIX} [SIMULATED]")
+                fig.tight_layout()
+                plt.show()
 
             return self._post_fit(self._sweep_vals)
 
         # ── Normal hardware mode ──
         prog = self._create_program()
-        self._sweep_vals = self._extract_sweep_axis(prog)
+        self._sweep_vals_x = self._extract_sweep_axis(prog)
+        self._sweep_vals_y = self._extract_sweep_axis_y(prog)
 
         self.iqdata, interrupted, avg_count = liveplotfun(
             prog=prog,
             soc=self.soc,
             py_avg=py_avg,
-            x_axis_vals=self._sweep_vals,
-            y_axis_vals=None,
+            x_axis_vals=self._sweep_vals_x,
+            y_axis_vals=self._sweep_vals_y,
             x_label=self.X_LABEL,
             y_label=self.Y_LABEL,
             title_prefix=self.TITLE_PREFIX,
@@ -121,7 +145,7 @@ class BaseExperiment:
                 "Fit is based on partial data."
             )
 
-        return self._post_fit(self._sweep_vals)
+        return self._post_fit(self._sweep_vals_x)
 
     # ══════════════════════════════════════════════
     # Unified save
@@ -152,7 +176,7 @@ class BaseExperiment:
         x_info = {
             "name": self.X_SAVE_NAME,
             "unit": self.X_SAVE_UNIT,
-            "values": self._sweep_vals * self.X_SAVE_SCALE,
+            "values": self._sweep_vals_x * self.X_SAVE_SCALE,
         }
 
         # Construct y_info (optional)
@@ -186,6 +210,13 @@ class BaseExperiment:
         """Subclass must implement: extract and return sweep axis values from prog."""
         raise NotImplementedError("Subclass must implement _extract_sweep_axis()")
 
+    def _extract_sweep_axis_y(self, prog):
+        """
+        Optional: extract and return y-axis sweep values (for 2D experiments).
+        Default: returns None (indicating 1D experiment).
+        """
+        return None
+
     # ══════════════════════════════════════════════
     # Subclass MAY override (hooks)
     # ══════════════════════════════════════════════
@@ -205,8 +236,18 @@ class BaseExperiment:
         """
         raise NotImplementedError(
             f"{self.__class__.__name__} does not support simulate mode. "
-            "Override _simulate(x_pts) to enable it."
+            "Override _simulate(x_pts) or _simulate(x_pts, y_pts) to enable it."
         )
+
+    def _mock_sweep_axis_y(self, **kwargs):
+        """
+        Optional: Generate y-axis sweep values without hardware.
+        Default: returns None.
+        """
+        # Allow explicit override via kwargs
+        if "y_pts" in kwargs:
+            return np.asarray(kwargs["y_pts"])
+        return None
 
     def _mock_sweep_axis(self, **kwargs):
         """

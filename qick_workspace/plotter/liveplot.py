@@ -182,15 +182,67 @@ def _liveplot_sw_avg(
 
     # --- Producer Loop (Data Acquisition) ---
     try:
-        for i in tqdm(range(py_avg), desc="Software Average Count", mininterval=0.1):
-            last_i = i
+        current_avg = 0
+        pbar = tqdm(total=py_avg, desc="Software Average Count", mininterval=0.1)
+        
+        while current_avg < py_avg and not stop_event.is_set():
+            # Determine batch size: 
+            # 1. At least 1
+            # 2. At most remaining needed
+            # 3. Can tune this: e.g. 5% of total, or fixed 10, or just 1 if py_avg is small
+            # Let's use a simple heuristic: 10% of py_avg, clamped between 1 and 50
+            batch_size = max(1, min(50, int(py_avg * 0.1)))
+            
+            # Ensure we don't overshot
+            if current_avg + batch_size > py_avg:
+                batch_size = py_avg - current_avg
+            
+            # Acquire batch
+            iq_list = prog.acquire(soc, rounds=batch_size, progress=False)
+            
+            # iq_list[0][0] is usually summed already by accumulate functionality in some firmware versions,
+            # BUT standard qick behavior for `rounds > 1` depends on `avg=True/False` in acquire?
+            # Looking at qick library, acquire(rounds=N) usually returns a list of N results if not averaged,
+            # or a single averaged result if load_pulses was called?
+            # Wait, `prog.acquire` typically returns `[[i, q], ...]` structure.
+            # If standard QICK `acquire` with `rounds=N` is used:
+            # It runs the loop N times.
+            # If the buffer accumulates, we get the sum.
+            # Let's assume standard behavior where we get the accumulated result or need to sum it.
+            # However, safely, `acquire` returns the buffer.
+            # Let's check how `iq_list` is structured. usually `iq_list[0][0]` is the buffer for first readout.
+            
+            # The original code:
+            # iq_list = prog.acquire(soc, rounds=1, progress=False)
+            # iq_data = iq_list[0][0].dot([1, 1j])
+            
+            # If we pass rounds=batch_size, the firmware repeats the experiment `batch_size` times.
+            # The accumulated buffer `iq_list[0][0]` *should* contain the sum of all shots IF the readout was configured to accumulate.
+            # OR it contains the average.
+            # QICK `AveragerProgram` usually returns averaged data if `rounds` is used.
+            # Let's assume it returns the AVERAGE of the batch.
+            
+            # We need to treat `iq_batch` as the average of `batch_size` shots.
+            iq_batch_accumulated = iq_list[0][0].dot([1, 1j]) 
+            
+            # Update cumulative average
+            # New_Avg = (Old_Avg * Old_Count + Batch_Avg * Batch_Size) / (Old_Count + Batch_Size)
+            # BUT: qick acquire returns accumulated SUM or AVERAGE?
+            # Standard AveragerProgram.acquire returns:
+            # self.di_buf[ch] / rounds if accumulated?
+            # Actually, `acquire` in AveragerProgramV2 usually returns the accumulated values divided by rounds?
+            # Let's handle it safely:
+            # If `iq_batch_accumulated` is the AVERAGE of the batch:
+            if iqdata is None:
+                iqdata = iq_batch_accumulated
+            else:
+                # Weighted average update
+                iqdata = (iqdata * current_avg + iq_batch_accumulated * batch_size) / (current_avg + batch_size)
 
-            # Acquire data from hardware
-            iq_list = prog.acquire(soc, rounds=1, progress=False)
-            iq_data = iq_list[0][0].dot([1, 1j])
-            # Perform cumulative moving average
-            iq = iq_data if i == 0 else iq + iq_data
-            iqdata = iq / (i + 1)
+            current_avg += batch_size
+            pbar.update(batch_size)
+            
+            # Plotting check (maybe not every single batch if batch is small?)
             plot_data_abs = np.abs(iqdata)
 
             # Prepare data for plotting (normalization for 2D if needed)
@@ -203,15 +255,18 @@ def _liveplot_sw_avg(
             else:
                 data_to_push = plot_data_abs
 
-            # Non-blocking push to queue: if full, drop the old frame and push the new one
+            # Non-blocking push to queue
             try:
-                data_queue.put_nowait((i, data_to_push))
+                data_queue.put_nowait((current_avg, data_to_push))
             except queue.Full:
                 try:
                     data_queue.get_nowait()  # Drop old frame
-                    data_queue.put_nowait((i, data_to_push))  # Push new frame
+                    data_queue.put_nowait((current_avg, data_to_push))  # Push new frame
                 except:
-                    pass  # Ignore race conditions during extreme load
+                    pass
+        
+        pbar.close()
+        last_i = current_avg - 1 # Adjust for 0-indexed return expectance if any, but logic uses count
 
     except KeyboardInterrupt:
         interrupted = True
