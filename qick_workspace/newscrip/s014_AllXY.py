@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tqdm.auto import tqdm
 
-from .base_program import BaseProgram
+from .base_program import BaseProgram, resolve_gate
 from ..tools.system_cfg import DATA_PATH
 from ..tools.system_tool import hdf5_generator, get_next_filename_labber, config_to_yaml
 
@@ -16,26 +16,26 @@ from ..tools.system_tool import hdf5_generator, get_next_filename_labber, config
 # AllXY gate sequence (21 pairs)
 ALLXY_SEQUENCE = [
     ("I", "I"),
-    ("x180_ge", "x180_ge"),
-    ("y180_ge", "y180_ge"),
-    ("x180_ge", "y180_ge"),
-    ("y180_ge", "x180_ge"),
-    ("x90_ge", "I"),
-    ("y90_ge", "I"),
-    ("x90_ge", "y90_ge"),
-    ("y90_ge", "x90_ge"),
-    ("x90_ge", "y180_ge"),
-    ("y90_ge", "x180_ge"),
-    ("x180_ge", "y90_ge"),
-    ("y180_ge", "x90_ge"),
-    ("x90_ge", "x180_ge"),
-    ("x180_ge", "x90_ge"),
-    ("y90_ge", "y180_ge"),
-    ("y180_ge", "y90_ge"),
-    ("x180_ge", "I"),
-    ("y180_ge", "I"),
-    ("x90_ge", "x90_ge"),
-    ("y90_ge", "y90_ge"),
+    ("X", "X"),
+    ("Y", "Y"),
+    ("X", "Y"),
+    ("Y", "X"),
+    ("X/2", "I"),
+    ("Y/2", "I"),
+    ("X/2", "Y/2"),
+    ("Y/2", "X/2"),
+    ("X/2", "Y"),
+    ("Y/2", "X"),
+    ("X", "Y/2"),
+    ("Y", "X/2"),
+    ("X/2", "X"),
+    ("X", "X/2"),
+    ("Y/2", "Y"),
+    ("Y", "Y/2"),
+    ("X", "I"),
+    ("Y", "I"),
+    ("X/2", "X/2"),
+    ("Y/2", "Y/2"),
 ]
 
 
@@ -53,13 +53,15 @@ class AllXYProgram(BaseProgram):
             self.apply_cool(cfg)
             self.cooling_body(cfg)
 
-        # Apply gate pair from cfg
+        # Apply gate pair from cfg (resolve shorthand → actual pulse name)
         gate1, gate2 = cfg["allxy_gates"]
-        if gate1 != "I":
-            self.pulse(ch=cfg["qb_ch"], name=gate1, t=0)
+        g1 = resolve_gate(gate1)
+        g2 = resolve_gate(gate2)
+        if g1 != "I":
+            self.pulse(ch=cfg["qb_ch"], name=g1, t=0)
         self.delay_auto(0.01)
-        if gate2 != "I":
-            self.pulse(ch=cfg["qb_ch"], name=gate2, t=0)
+        if g2 != "I":
+            self.pulse(ch=cfg["qb_ch"], name=g2, t=0)
 
         self.delay_auto(0.05)
         self.measure(cfg)

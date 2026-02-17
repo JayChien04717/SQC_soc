@@ -8,6 +8,44 @@ Subclasses only need to implement _initialize() and _body().
 from qick.asm_v2 import AveragerProgramV2
 
 
+# ── Gate Name Mapping ──
+# Maps shorthand gate names to pulse name templates.
+# {pfx} is replaced by the transition prefix (e.g. "ge", "ef").
+GATE_ALIAS = {
+    # Clifford shorthand (used in AllXY / Tomography)
+    "X":     "x180_{pfx}",
+    "Y":     "y180_{pfx}",
+    "X/2":   "x90_{pfx}",
+    "-X/2":  "x90m_{pfx}",
+    "Y/2":   "y90_{pfx}",
+    "-Y/2":  "y90m_{pfx}",
+    # Bare names without prefix
+    "x180":  "x180_{pfx}",
+    "y180":  "y180_{pfx}",
+    "x90":   "x90_{pfx}",
+    "x90m":  "x90m_{pfx}",
+    "y90":   "y90_{pfx}",
+    "y90m":  "y90m_{pfx}",
+}
+
+
+def resolve_gate(name, prefix="ge"):
+    """Resolve shorthand gate name to actual pulse name.
+
+    Examples:
+        resolve_gate("X")      -> "x180_ge"
+        resolve_gate("-X/2")   -> "x90m_ge"
+        resolve_gate("x90")    -> "x90_ge"
+        resolve_gate("x180_ge") -> "x180_ge"  (pass-through)
+        resolve_gate("I")      -> "I"          (identity)
+    """
+    if name in ("I", "-I", None, "None"):
+        return name
+    if name in GATE_ALIAS:
+        return GATE_ALIAS[name].format(pfx=prefix)
+    return name  # already fully qualified
+
+
 class BaseProgram(AveragerProgramV2):
     """
     Base class for all QICK programs.

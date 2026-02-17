@@ -9,7 +9,7 @@ import numpy as np
 from tqdm.auto import tqdm
 import matplotlib.colors as mcolors
 
-from .base_program import BaseProgram
+from .base_program import BaseProgram, resolve_gate
 from ..tools.system_cfg import DATA_PATH
 from ..tools.system_tool import hdf5_generator, get_next_filename_labber, config_to_yaml
 
@@ -100,10 +100,11 @@ class Tomography:
 
     def _run_tomography(self, pyavg, prep_pulse_name=None):
         """Run X, Y, Z measurements."""
+        resolved = resolve_gate(prep_pulse_name) if prep_pulse_name else None
         tomo_data = {}
         for axis in tqdm(["X", "Y", "Z"], desc=f"Tomography ({prep_pulse_name})"):
             cfg = self.cfg.copy()
-            cfg.update({"tomo_axis": axis, "cal_pulse": None, "prep_pulse": prep_pulse_name})
+            cfg.update({"tomo_axis": axis, "cal_pulse": None, "prep_pulse": resolved})
             prog = StateTomographyProgram(
                 self.soccfg, reps=self.cfg["reps"],
                 final_delay=self.cfg["relax_delay"], cfg=cfg,
