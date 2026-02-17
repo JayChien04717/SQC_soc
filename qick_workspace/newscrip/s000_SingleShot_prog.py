@@ -44,8 +44,8 @@ def plot_hist(data, bins, ax=None, xlims=None, color=None, linestyle=None,
     return hist_data, bin_edges
 
 
-# Re-export general_hist and hist from original module to keep compatibility
-from ..scrip.s000_SingleShot_prog import general_hist, hist
+# Re-use utilities from local singleshot_utils
+from .singleshot_utils import general_hist, hist
 
 
 # ── Program ──
