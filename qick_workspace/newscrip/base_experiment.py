@@ -131,7 +131,8 @@ class BaseExperiment:
             x_label=self.X_LABEL,
             y_label=self.Y_LABEL,
             title_prefix=self.TITLE_PREFIX,
-            yoko_inst_addr=None,
+            yoko_inst_addr=kwargs.get("yoko_inst_addr"),
+            yoko_mode=kwargs.get("yoko_mode", "current"),
             show_final_plot=False,
         )
 
