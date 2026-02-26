@@ -271,6 +271,37 @@ class BaseExperiment:
             "Pass x_pts=np.linspace(...) explicitly."
         )
 
+    def subjob(self, py_avg: int, qubit: str = "Q1", priority: int = 0, user: str = "jay", server_url: str = "http://127.0.0.1:8585"):
+        """
+        Submit this experiment to the QICK Job Server, wait for it to complete,
+        and populate `self.iqdata` with the results.
+        """
+        from qick_job_server.client import JobClient
+        client = JobClient(server_url)
+
+        # 1. Submit using the instance's own class, module, and cfg
+        job_id = client.submit(
+            experiment_class=self.__class__.__name__,
+            experiment_module=self.__module__,
+            run_cfg=self.cfg,
+            qubit=qubit,
+            py_avg=py_avg,
+            user=user,
+            priority=priority
+        )
+
+        # 2. Wait for completion
+        client.wait_for_completion(job_id)
+
+        # 3. Fetch results and populate self
+        result = client.get_result(job_id)
+        self.iqdata = result.iqdata
+        self._sweep_vals_x = getattr(result, "_sweep_vals_x", None)
+        self._sweep_vals_y = getattr(result, "_sweep_vals_y", None)
+
+        print(f"[{self.__class__.__name__}] Job {job_id} complete. Data loaded.")
+        return self.iqdata
+
     def _save_comment(self, dict_val):
         """
         Optional hook: customize the comment string for saveLabber.

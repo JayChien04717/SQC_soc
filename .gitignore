@@ -5,3 +5,6 @@ __pycache__/
 .idea/
 *.h5
 Data/
+*.db
+*/results/
+__pycache__/
