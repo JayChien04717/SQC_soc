@@ -262,45 +262,92 @@ class BaseExperiment:
         # Try to extract from QickSweep1D objects in cfg
         for key in self.SWEEP_KEYS_TO_REMOVE:
             val = self.cfg.get(key)
-            if val is not None and hasattr(val, "start") and hasattr(val, "stop"):
+            if val is not None and hasattr(val, "start"):
+                try:
+                    span = list(val.spans.values())[0] if hasattr(val, "spans") and val.spans else 0
+                    stop = val.start + span
+                except Exception:
+                    # Fallback if spans dict isn't available
+                    stop = getattr(val, "stop", getattr(val, "maxval", val.start))
+                    
                 steps = self.cfg.get("steps", 101)
-                return np.linspace(val.start, val.stop, steps)
+                return np.linspace(val.start, stop, steps)
 
         raise ValueError(
             f"Cannot determine sweep axis for {self.__class__.__name__} in simulate mode. "
             "Pass x_pts=np.linspace(...) explicitly."
         )
 
-    def subjob(self, py_avg: int, qubit: str = "Q1", priority: int = 0, user: str = "jay", server_url: str = "http://127.0.0.1:8585"):
+    def subjob(self, py_avg: int, qubit: str = "Q1", priority: int = 0, user: str = "jay", server_url: str = "http://127.0.0.1:8585", wait: bool = True, analyze: bool = True):
         """
-        Submit this experiment to the QICK Job Server, wait for it to complete,
-        and populate `self.iqdata` with the results.
+        Submit this experiment to the QICK Job Server.
+
+        If ``wait`` is ``True`` (default), blocks until the job completes and populates
+        ``self.iqdata``, ``self._sweep_vals_x`` etc. from the worker's result.
+        If ``wait`` is ``False``, returns a ``JobHandle`` for asynchronous tracking.
+
+        The optional ``analyze`` flag (default ``True``) determines whether the
+        post‑fit routine ``_post_fit`` is applied after the data is loaded.
+
+        Args:
+            py_avg: Number of software averages
+            qubit: Target qubit identifier (e.g., "Q1")
+            priority: Higher = runs sooner (default 0)
+            user: Username for the job queue
+            server_url: URL of the QICK Job Server
+            wait: If ``True``, block until completion
+            analyze: If ``True``, run ``_post_fit`` on the loaded sweep values.
+
+        Returns:
+            If ``wait`` is ``True``:
+                - ``self.iqdata`` (numpy array) when ``analyze`` is ``False``
+                - The result of ``_post_fit`` when ``analyze`` is ``True``
+            If ``wait`` is ``False``: ``JobHandle`` instance
         """
-        from qick_job_server.client import JobClient
+        from qick_workspace.qick_job_server.client import JobClient
         client = JobClient(server_url)
 
-        # 1. Submit using the instance's own class, module, and cfg
+        # Submit using the instance's own class, module, and cfg
         job_id = client.submit(
             experiment_class=self.__class__.__name__,
             experiment_module=self.__module__,
-            run_cfg=self.cfg,
+            run_cfg=dict(self.cfg) if hasattr(self.cfg, 'items') else self.cfg,
             qubit=qubit,
             py_avg=py_avg,
             user=user,
-            priority=priority
+            priority=priority,
         )
 
-        # 2. Wait for completion
-        client.wait_for_completion(job_id)
+        if wait:
+            # Wait for completion and load result
+            client.wait_for_completion(job_id)
+            result = client.get_result(job_id)
 
-        # 3. Fetch results and populate self
-        result = client.get_result(job_id)
-        self.iqdata = result.iqdata
-        self._sweep_vals_x = getattr(result, "_sweep_vals_x", None)
-        self._sweep_vals_y = getattr(result, "_sweep_vals_y", None)
+            # Populate this instance with worker results
+            if result._expt is not None:
+                self.iqdata = result.iqdata
+                self.fit_params = result.fit_params
+                
+                # Check if it was saved as dict (new format) or object (old format)
+                if isinstance(result._expt, dict):
+                    self._sweep_vals_x = result._expt.get("_sweep_vals_x", result._expt.get("_sweep_vals"))
+                    self._sweep_vals_y = result._expt.get("_sweep_vals_y")
+                else:
+                    self._sweep_vals_x = getattr(result._expt, "_sweep_vals_x", getattr(result._expt, "_sweep_vals", None))
+                    self._sweep_vals_y = getattr(result._expt, "_sweep_vals_y", None)
 
-        print(f"[{self.__class__.__name__}] Job {job_id} complete. Data loaded.")
-        return self.iqdata
+            print(f"[{self.__class__.__name__}] Job {job_id} complete. Data loaded.")
+
+            if analyze:
+                # Run post‑fit on the loaded sweep values and store the result
+                fit_result = self._post_fit(self._sweep_vals_x)
+                self.fit_params = fit_result
+                return fit_result
+            else:
+                return self.iqdata
+        else:
+            print(f"[{self.__class__.__name__}] Job {job_id} submitted to background.")
+            return client.get_handle(job_id, self)
 
     def _save_comment(self, dict_val):
         """

@@ -1,5 +1,6 @@
 from addict import Dict
 
+DATA_PATH = r"C:/Users/cluster/Desktop/SQC_soc-jobserver/qick_workspace/data/"
 config_list = [
     ########## Q1 Config ###########
     {
