@@ -3,6 +3,7 @@ s003 — Qubit Spectroscopy (ge)
 ===============================
 Two-tone spectroscopy: sweeps qubit drive frequency.
 """
+
 from .base_program import BaseProgram
 from .base_experiment import BaseExperiment
 from .mock_signals import mock_lorentzian
@@ -13,9 +14,9 @@ from ..plotter.plot_utils import plot_final
 class QubitSpecProgram(BaseProgram):
     def _initialize(self, cfg):
         self.setup_resonator(cfg)
-        self.setup_qubit_gen(cfg, 'ge')
+        self.setup_qubit_gen(cfg, "ge")
         self.add_loop("freqloop", cfg["steps"])
-        self.setup_qb_pulse(cfg, 'ge', name="qb_pulse")
+        self.setup_qb_pulse(cfg, "ge", name="qb_pulse", pulse_type="flat_top")
 
     def _body(self, cfg):
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
@@ -39,8 +40,10 @@ class QubitSpec(BaseExperiment):
 
     def _create_program(self):
         return QubitSpecProgram(
-            self.soccfg, reps=self.cfg["reps"],
-            final_delay=self.cfg["relax_delay"], cfg=self.cfg,
+            self.soccfg,
+            reps=self.cfg["reps"],
+            final_delay=self.cfg["relax_delay"],
+            cfg=self.cfg,
         )
 
     def _extract_sweep_axis(self, prog):

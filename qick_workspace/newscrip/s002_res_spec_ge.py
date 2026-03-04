@@ -44,7 +44,11 @@ class ResonatorSpec(BaseExperiment):
     def _simulate(self, x_pts):
         f0 = self.cfg.get("res_freq_ge", (x_pts[0] + x_pts[-1]) / 2)
         if hasattr(f0, "start"):
-            f0 = (f0.start + f0.stop) / 2
+            try:
+                span = list(f0.spans.values())[0] if hasattr(f0, "spans") and f0.spans else 0
+                f0 = f0.start + span / 2
+            except Exception:
+                f0 = (x_pts[0] + x_pts[-1]) / 2
         return mock_lorentzian(x_pts, f0=f0, gamma=2, amp=1.0, offset=0.5)
 
     def _post_fit(self, x_vals):

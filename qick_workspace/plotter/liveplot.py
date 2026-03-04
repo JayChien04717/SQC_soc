@@ -16,7 +16,6 @@ from ..tools.system_tool import auto_unit
 # ===================================================================
 # 1. The Facade Function
 # ===================================================================
-OUTWINDOWS = True
 
 
 def liveplotfun(
@@ -36,7 +35,6 @@ def liveplotfun(
     get_prog_callback=None,  # Callback function to dynamically generate programs for 1D scan
     # --- General ---
     show_final_plot=True,
-    OUTWINDOWS=OUTWINDOWS,  # If True, use popup window; if False, use inline display
 ):
     """
     General-purpose live plotter (Facade pattern).
@@ -88,7 +86,6 @@ def liveplotfun(
             y_label=y_label,
             title_prefix=title_prefix,
             show_final_plot=show_final_plot,
-            OUTWINDOWS=OUTWINDOWS,
         )
 
 
@@ -105,29 +102,12 @@ def _liveplot_sw_avg(
     y_label="Y Axis",
     title_prefix="Experiment",
     show_final_plot=False,
-    OUTWINDOWS=False,
 ):
     """
-    [Internal function] Executes a software-averaged live plot (1D or 2D).
-
-    If OUTWINDOWS=True, uses popup window (matplotlib interactive mode).
-    If OUTWINDOWS=False, uses inline display in notebook (original behavior).
+    [Internal function] Executes a software-averaged live plot (1D or 2D) using a separate, persistent thread
+    for non-blocking visualization. Utilizes a producer-consumer pattern with frame dropping to ensure
+    data acquisition speed is not bottlenecked by rendering performance.
     """
-
-    # If OUTWINDOWS is True, use popup window implementation
-    if OUTWINDOWS:
-        return _liveplot_sw_avg_popup(
-            prog=prog,
-            soc=soc,
-            py_avg=py_avg,
-            x_axis_vals=x_axis_vals,
-            y_axis_vals=y_axis_vals,
-            x_label=x_label,
-            y_label=y_label,
-            title_prefix=title_prefix,
-        )
-
-    # Original inline display implementation
     # Use a LIFO queue with maxsize=1 to always prefer the latest data frame, implementing "frame dropping"
     data_queue = queue.LifoQueue(maxsize=1)
     stop_event = threading.Event()
@@ -202,69 +182,15 @@ def _liveplot_sw_avg(
 
     # --- Producer Loop (Data Acquisition) ---
     try:
-        current_avg = 0
-        pbar = tqdm(total=py_avg, desc="Software Average Count", mininterval=0.1)
+        for i in tqdm(range(py_avg), desc="Software Average Count", mininterval=0.1):
+            last_i = i
 
-        while current_avg < py_avg and not stop_event.is_set():
-            # Determine batch size:
-            # 1. At least 1
-            # 2. At most remaining needed
-            # 3. Can tune this: e.g. 5% of total, or fixed 10, or just 1 if py_avg is small
-            # Let's use a simple heuristic: 10% of py_avg, clamped between 1 and 50
-            batch_size = max(1, min(50, int(py_avg * 0.1)))
-
-            # Ensure we don't overshot
-            if current_avg + batch_size > py_avg:
-                batch_size = py_avg - current_avg
-
-            # Acquire batch
-            iq_list = prog.acquire(soc, rounds=batch_size, progress=False)
-
-            # iq_list[0][0] is usually summed already by accumulate functionality in some firmware versions,
-            # BUT standard qick behavior for `rounds > 1` depends on `avg=True/False` in acquire?
-            # Looking at qick library, acquire(rounds=N) usually returns a list of N results if not averaged,
-            # or a single averaged result if load_pulses was called?
-            # Wait, `prog.acquire` typically returns `[[i, q], ...]` structure.
-            # If standard QICK `acquire` with `rounds=N` is used:
-            # It runs the loop N times.
-            # If the buffer accumulates, we get the sum.
-            # Let's assume standard behavior where we get the accumulated result or need to sum it.
-            # However, safely, `acquire` returns the buffer.
-            # Let's check how `iq_list` is structured. usually `iq_list[0][0]` is the buffer for first readout.
-
-            # The original code:
-            # iq_list = prog.acquire(soc, rounds=1, progress=False)
-            # iq_data = iq_list[0][0].dot([1, 1j])
-
-            # If we pass rounds=batch_size, the firmware repeats the experiment `batch_size` times.
-            # The accumulated buffer `iq_list[0][0]` *should* contain the sum of all shots IF the readout was configured to accumulate.
-            # OR it contains the average.
-            # QICK `AveragerProgram` usually returns averaged data if `rounds` is used.
-            # Let's assume it returns the AVERAGE of the batch.
-
-            # We need to treat `iq_batch` as the average of `batch_size` shots.
-            iq_batch_accumulated = iq_list[0][0].dot([1, 1j])
-
-            # Update cumulative average
-            # New_Avg = (Old_Avg * Old_Count + Batch_Avg * Batch_Size) / (Old_Count + Batch_Size)
-            # BUT: qick acquire returns accumulated SUM or AVERAGE?
-            # Standard AveragerProgram.acquire returns:
-            # self.di_buf[ch] / rounds if accumulated?
-            # Actually, `acquire` in AveragerProgramV2 usually returns the accumulated values divided by rounds?
-            # Let's handle it safely:
-            # If `iq_batch_accumulated` is the AVERAGE of the batch:
-            if iqdata is None:
-                iqdata = iq_batch_accumulated
-            else:
-                # Weighted average update
-                iqdata = (iqdata * current_avg + iq_batch_accumulated * batch_size) / (
-                    current_avg + batch_size
-                )
-
-            current_avg += batch_size
-            pbar.update(batch_size)
-
-            # Plotting check (maybe not every single batch if batch is small?)
+            # Acquire data from hardware
+            iq_list = prog.acquire(soc, rounds=1, progress=False)
+            iq_data = iq_list[0][0].dot([1, 1j])
+            # Perform cumulative moving average
+            iq = iq_data if i == 0 else iq + iq_data
+            iqdata = iq / (i + 1)
             plot_data_abs = np.abs(iqdata)
 
             # Prepare data for plotting (normalization for 2D if needed)
@@ -277,20 +203,15 @@ def _liveplot_sw_avg(
             else:
                 data_to_push = plot_data_abs
 
-            # Non-blocking push to queue
+            # Non-blocking push to queue: if full, drop the old frame and push the new one
             try:
-                data_queue.put_nowait((current_avg, data_to_push))
+                data_queue.put_nowait((i, data_to_push))
             except queue.Full:
                 try:
                     data_queue.get_nowait()  # Drop old frame
-                    data_queue.put_nowait((current_avg, data_to_push))  # Push new frame
+                    data_queue.put_nowait((i, data_to_push))  # Push new frame
                 except:
-                    pass
-
-        pbar.close()
-        last_i = (
-            current_avg - 1
-        )  # Adjust for 0-indexed return expectance if any, but logic uses count
+                    pass  # Ignore race conditions during extreme load
 
     except KeyboardInterrupt:
         interrupted = True
@@ -338,171 +259,6 @@ def _liveplot_sw_avg(
                 transform=final_ax.transAxes,
             )
         display(final_fig)
-        plt.close(final_fig)
-
-    return iqdata, interrupted, last_i + 1
-
-
-# ===================================================================
-# 2b. Internal Function: Software Averaging with Popup Window
-# ===================================================================
-def _liveplot_sw_avg_popup(
-    prog,
-    soc,
-    py_avg,
-    x_axis_vals,
-    y_axis_vals=None,
-    x_label="X Axis",
-    y_label="Y Axis",
-    title_prefix="Experiment",
-):
-    """
-    [Internal function] Software averaging with popup window display.
-    Uses matplotlib's interactive mode to create an independent popup window.
-    """
-    # Enable matplotlib interactive mode
-    plt.ion()
-
-    # Create popup window
-    is_2d = y_axis_vals is not None
-    fig, ax = plt.subplots(figsize=(8, 6), num=title_prefix)
-    fig.canvas.manager.set_window_title(title_prefix)
-
-    # Add status text
-    status_text = fig.text(
-        0.5,
-        0.02,
-        "Status: Running... (Close window to stop)",
-        ha="center",
-        fontsize=9,
-        bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5),
-    )
-    fig.subplots_adjust(bottom=0.1)
-
-    # Initialize plot
-    plot_artist = None
-    if is_2d:
-        plot_artist = ax.pcolormesh(
-            x_axis_vals,
-            y_axis_vals,
-            np.zeros((len(y_axis_vals), len(x_axis_vals))),
-            cmap="viridis",
-            shading="auto",
-        )
-        fig.colorbar(plot_artist, ax=ax, label="Normalized Amplitude")
-        ax.set_ylabel(y_label)
-    else:
-        (plot_artist,) = ax.plot(
-            x_axis_vals, np.zeros_like(x_axis_vals), "o-", markersize=5, alpha=0.7
-        )
-        ax.set_ylabel("ADC Units (Abs)")
-
-    ax.set_xlabel(x_label)
-    ax.set_title(f"{title_prefix} (Initializing...)")
-
-    # Connect close event
-    stop_event = threading.Event()
-    fig.canvas.mpl_connect("close_event", lambda evt: stop_event.set())
-
-    plt.show(block=False)
-    plt.pause(0.1)
-
-    # Data acquisition
-    iqdata = None
-    last_i = 0
-    interrupted = False
-
-    try:
-        current_avg = 0
-        pbar = tqdm(total=py_avg, desc="Software Average Count", mininterval=0.1)
-
-        while current_avg < py_avg and not stop_event.is_set():
-            # Check if window still exists
-            if not plt.fignum_exists(fig.number):
-                stop_event.set()
-                break
-
-            # Acquire data
-            iq_list = prog.acquire(soc, rounds=1, progress=False)
-            iq_data_single = iq_list[0][0].dot([1, 1j])
-
-            # Update cumulative average
-            if iqdata is None:
-                iqdata = iq_data_single
-            else:
-                iqdata = (iqdata * current_avg + iq_data_single) / (current_avg + 1)
-
-            current_avg += 1
-            pbar.update(1)
-
-            # Prepare data for plotting
-            plot_data_abs = np.abs(iqdata)
-
-            if is_2d:
-                # Normalize each row for 2D plots
-                row_mins = plot_data_abs.min(axis=1, keepdims=True)
-                row_maxs = plot_data_abs.max(axis=1, keepdims=True)
-                ranges = row_maxs - row_mins
-                ranges[ranges == 0] = 1
-                data_to_plot = (plot_data_abs - row_mins) / ranges
-            else:
-                data_to_plot = plot_data_abs
-
-            # Update plot
-            try:
-                if is_2d:
-                    plot_artist.set_array(data_to_plot.ravel())
-                    plot_artist.set_clim(
-                        vmin=np.min(data_to_plot), vmax=np.max(data_to_plot)
-                    )
-                else:
-                    plot_artist.set_ydata(data_to_plot)
-                    data_min, data_max = np.min(data_to_plot), np.max(data_to_plot)
-                    data_range = data_max - data_min
-                    if data_range > 0:
-                        ax.set_ylim(
-                            data_min - 0.1 * data_range, data_max + 0.1 * data_range
-                        )
-
-                # Update title and status
-                ax.set_title(f"{title_prefix} | Average: {current_avg} / {py_avg}")
-                status_text.set_text(f"Status: Acquiring... {current_avg}/{py_avg}")
-
-                fig.canvas.draw()
-                fig.canvas.flush_events()
-                plt.pause(0.001)
-            except:
-                pass
-
-        pbar.close()
-        last_i = current_avg - 1
-
-        if stop_event.is_set():
-            interrupted = True
-            try:
-                status_text.set_text(f"Status: Interrupted at {current_avg}/{py_avg}")
-                fig.canvas.draw()
-            except:
-                pass
-        else:
-            try:
-                status_text.set_text("Status: Completed!")
-                fig.canvas.draw()
-            except:
-                pass
-
-    except KeyboardInterrupt:
-        interrupted = True
-        try:
-            status_text.set_text("Status: Interrupted by keyboard")
-            fig.canvas.draw()
-        except:
-            pass
-    except Exception as e:
-        interrupted = True
-        print(f"Error during acquisition: {e}")
-
-    print("\nAcquisition completed. Close the window when done viewing.")
 
     return iqdata, interrupted, last_i + 1
 

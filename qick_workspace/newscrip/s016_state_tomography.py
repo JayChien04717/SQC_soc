@@ -4,7 +4,6 @@ s016 — Single Qubit State Tomography
 X/Y/Z measurement axes with calibration (|0⟩, |1⟩).
 Uses setup_standard_gates() for gate pulses.
 """
-
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm.auto import tqdm
@@ -17,12 +16,11 @@ from ..tools.system_tool import hdf5_generator, get_next_filename_labber, config
 
 # ── Program ──
 
-
 class StateTomographyProgram(BaseProgram):
     def _initialize(self, cfg):
         self.setup_resonator(cfg)
-        self.setup_qubit_gen(cfg, "ge")
-        self.setup_standard_gates(cfg, prefix="ge")
+        self.setup_qubit_gen(cfg, 'ge')
+        self.setup_standard_gates(cfg, prefix='ge')
 
     def _body(self, cfg):
         axis = cfg["tomo_axis"]
@@ -59,7 +57,6 @@ class StateTomographyProgram(BaseProgram):
 
 # ── Experiment ──
 
-
 class Tomography:
     """Single-qubit state tomography with X/Y/Z measurements + MLE reconstruction."""
 
@@ -73,10 +70,10 @@ class Tomography:
         self.expect_values = {}
         self.rho_mle = None
         self.prep_pulse_name = None
-        self._I = np.array([[1, 0], [0, 1]], dtype=complex)
-        self._sx = np.array([[0, 1], [1, 0]], dtype=complex)
-        self._sy = np.array([[0, -1j], [1j, 0]], dtype=complex)
-        self._sz = np.array([[1, 0], [0, -1]], dtype=complex)
+        self._I = np.array([[1,0],[0,1]], dtype=complex)
+        self._sx = np.array([[0,1],[1,0]], dtype=complex)
+        self._sy = np.array([[0,-1j],[1j,0]], dtype=complex)
+        self._sz = np.array([[1,0],[0,-1]], dtype=complex)
 
     def _run_calibration(self, pyavg):
         """Calibrate |0⟩ and |1⟩ states."""
@@ -84,10 +81,8 @@ class Tomography:
         cfg_g = self.cfg.copy()
         cfg_g.update({"tomo_axis": "Z", "cal_pulse": "None", "prep_pulse": None})
         prog_g = StateTomographyProgram(
-            self.soccfg,
-            reps=self.cfg["reps"],
-            final_delay=self.cfg["relax_delay"],
-            cfg=cfg_g,
+            self.soccfg, reps=self.cfg["reps"],
+            final_delay=self.cfg["relax_delay"], cfg=cfg_g,
         )
         iq_g = prog_g.acquire(self.soc, rounds=pyavg, progress=False)[0][0].dot([1, 1j])
 
@@ -95,10 +90,8 @@ class Tomography:
         cfg_e = self.cfg.copy()
         cfg_e.update({"tomo_axis": "Z", "cal_pulse": "x180_ge", "prep_pulse": None})
         prog_e = StateTomographyProgram(
-            self.soccfg,
-            reps=self.cfg["reps"],
-            final_delay=self.cfg["relax_delay"],
-            cfg=cfg_e,
+            self.soccfg, reps=self.cfg["reps"],
+            final_delay=self.cfg["relax_delay"], cfg=cfg_e,
         )
         iq_e = prog_e.acquire(self.soc, rounds=pyavg, progress=False)[0][0].dot([1, 1j])
 
@@ -113,10 +106,8 @@ class Tomography:
             cfg = self.cfg.copy()
             cfg.update({"tomo_axis": axis, "cal_pulse": None, "prep_pulse": resolved})
             prog = StateTomographyProgram(
-                self.soccfg,
-                reps=self.cfg["reps"],
-                final_delay=self.cfg["relax_delay"],
-                cfg=cfg,
+                self.soccfg, reps=self.cfg["reps"],
+                final_delay=self.cfg["relax_delay"], cfg=cfg,
             )
             iq = prog.acquire(self.soc, rounds=pyavg, progress=False)[0][0].dot([1, 1j])
             tomo_data[axis] = iq
@@ -125,9 +116,7 @@ class Tomography:
     def _project_to_expect(self, iq_data, iq_g, iq_e):
         cal_vector = iq_e - iq_g
         data_vector = iq_data - iq_g
-        projection = (
-            np.real(data_vector * np.conj(cal_vector)) / np.abs(cal_vector) ** 2
-        )
+        projection = np.real(data_vector * np.conj(cal_vector)) / np.abs(cal_vector)**2
         return np.clip((1 - projection) - projection, -1, 1)
 
     def _mle_reconstruction(self, rho_raw):
@@ -141,10 +130,9 @@ class Tomography:
         expect_values = {}
         for axis in ["X", "Y", "Z"]:
             expect_values[axis] = self._project_to_expect(
-                self.tomo_data_raw[axis], self.iq_g, self.iq_e
-            )
+                self.tomo_data_raw[axis], self.iq_g, self.iq_e)
         r_x, r_y, r_z = expect_values["X"], expect_values["Y"], expect_values["Z"]
-        rho_raw = 0.5 * (self._I + r_x * self._sx + r_y * self._sy + r_z * self._sz)
+        rho_raw = 0.5 * (self._I + r_x*self._sx + r_y*self._sy + r_z*self._sz)
         rho_mle = self._mle_reconstruction(rho_raw)
         purity = np.real(np.trace(rho_mle @ rho_mle))
         print(f"\n<X>={r_x:.4f}, <Y>={r_y:.4f}, <Z>={r_z:.4f}")
@@ -163,7 +151,6 @@ class Tomography:
     def _simulate(self, prep_pulse_name=None):
         """Generate mock calibration + tomography data without hardware."""
         from .mock_signals import mock_tomography
-
         # Mock calibration: ground=0, excited=1+0j
         self.iq_g = 0.05 + 0.05j
         self.iq_e = 1.0 + 0.1j
@@ -196,57 +183,34 @@ class Tomography:
         if plot_type == "2d":
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5))
             fig.suptitle(title_prefix, fontsize=18, y=1.05)
-            for ax, data, norm, title in [
-                (ax1, rho_real, norm_r, "Real(ρ)"),
-                (ax2, rho_imag, norm_i, "Imag(ρ)"),
-            ]:
+            for ax, data, norm, title in [(ax1,rho_real,norm_r,"Real(ρ)"), (ax2,rho_imag,norm_i,"Imag(ρ)")]:
                 im = ax.matshow(data, cmap=cmap, norm=norm)
                 ax.set_title(title, fontsize=16)
                 fig.colorbar(im, ax=ax, shrink=0.8)
-                ax.set_xticks([0, 1])
-                ax.set_yticks([0, 1])
-                ax.set_xticklabels(labels_k)
-                ax.set_yticklabels(labels_b)
+                ax.set_xticks([0,1]); ax.set_yticks([0,1])
+                ax.set_xticklabels(labels_k); ax.set_yticklabels(labels_b)
                 ax.xaxis.set_ticks_position("bottom")
                 for i in range(2):
                     for j in range(2):
-                        val = data[i, j]
+                        val = data[i,j]
                         bg = cmap(norm(val))
-                        tc = (
-                            "black"
-                            if 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2] > 0.5
-                            else "white"
-                        )
-                        ax.text(
-                            j,
-                            i,
-                            f"{val:.2f}",
-                            ha="center",
-                            va="center",
-                            color=tc,
-                            fontsize=12,
-                        )
+                        tc = "black" if 0.299*bg[0]+0.587*bg[1]+0.114*bg[2] > 0.5 else "white"
+                        ax.text(j, i, f"{val:.2f}", ha="center", va="center", color=tc, fontsize=12)
             plt.tight_layout()
             plt.show()
             return fig, (ax1, ax2)
         elif plot_type == "3d":
             fig = plt.figure(figsize=(12, 6))
             fig.suptitle(title_prefix, fontsize=18, y=1.0)
-            for idx, (data, norm, title) in enumerate(
-                [(rho_real, norm_r, "Real(ρ)"), (rho_imag, norm_i, "Imag(ρ)")]
-            ):
-                ax = fig.add_subplot(1, 2, idx + 1, projection="3d")
-                x_pos, y_pos = [0, 0, 1, 1], [0, 1, 0, 1]
+            for idx, (data, norm, title) in enumerate([(rho_real,norm_r,"Real(ρ)"), (rho_imag,norm_i,"Imag(ρ)")]):
+                ax = fig.add_subplot(1, 2, idx+1, projection="3d")
+                x_pos, y_pos = [0,0,1,1], [0,1,0,1]
                 dz = data.flatten()
                 colors = cmap(norm(dz))
-                ax.bar3d(
-                    x_pos, y_pos, np.zeros(4), 0.8, 0.8, dz, color=colors, shade=True
-                )
+                ax.bar3d(x_pos, y_pos, np.zeros(4), 0.8, 0.8, dz, color=colors, shade=True)
                 ax.set_title(title, fontsize=16)
-                ax.set_xticks([0.4, 1.4])
-                ax.set_yticks([0.4, 1.4])
-                ax.set_xticklabels(labels_k)
-                ax.set_yticklabels(labels_b)
+                ax.set_xticks([0.4,1.4]); ax.set_yticks([0.4,1.4])
+                ax.set_xticklabels(labels_k); ax.set_yticklabels(labels_b)
                 z_max = max(np.max(np.abs(data)), 1e-9)
                 ax.set_zlim(-z_max, z_max)
             plt.tight_layout(rect=[0, 0.03, 1, 0.95])
@@ -269,14 +233,11 @@ class Tomography:
             f"rho_mle:\n{self.rho_mle}"
         )
         x_vals = np.array([0, 1, 2])
-        z_vals = np.array(
-            [self.tomo_data_raw["X"], self.tomo_data_raw["Y"], self.tomo_data_raw["Z"]]
-        )
+        z_vals = np.array([self.tomo_data_raw["X"], self.tomo_data_raw["Y"], self.tomo_data_raw["Z"]])
         hdf5_generator(
             filepath=file_path,
             x_info={"name": "Axis", "unit": "None (0=X, 1=Y, 2=Z)", "values": x_vals},
             z_info={"name": "Signal", "unit": "ADC unit", "values": z_vals},
-            comment=comment,
-            tag="Tomography",
+            comment=comment, tag="Tomography",
         )
         print(f"Data save to {file_path}")

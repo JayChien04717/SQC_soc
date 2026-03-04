@@ -1,11 +1,10 @@
 """
-plotter.singleshot_utils
+newscrip.singleshot_utils
 =========================
 Histogram and analysis utilities for SingleShot experiments.
 Ported from scrip/s000_SingleShot_ge_prog_opt.py — full 4-panel plot
 with IQ scatter, rotated scatter, histogram, and confusion matrix.
 """
-
 import matplotlib.pyplot as plt
 import numpy as np
 from itertools import cycle
@@ -18,17 +17,8 @@ linestyle_cycle = ["solid", "dashed", "dotted", "dashdot"]
 marker_cycle = ["o", "*", "s", "^"]
 
 
-def plot_hist(
-    data,
-    bins,
-    ax=None,
-    xlims=None,
-    color=None,
-    linestyle=None,
-    label=None,
-    alpha=None,
-    normalize=True,
-):
+def plot_hist(data, bins, ax=None, xlims=None, color=None, linestyle=None,
+              label=None, alpha=None, normalize=True):
     if color is None:
         color = next(cycle(default_colors))
     hist_data, bin_edges = np.histogram(data, bins=bins, range=xlims)
@@ -38,52 +28,23 @@ def plot_hist(
             hist_data = hist_data / hist_sum
 
     for i in range(len(hist_data)):
-        ax.plot(
-            [bin_edges[i], bin_edges[i + 1]],
-            [hist_data[i], hist_data[i]],
-            color=color,
-            linestyle=linestyle,
-            label=label if i == 0 else None,
-            alpha=alpha,
-            linewidth=0.9,
-        )
+        ax.plot([bin_edges[i], bin_edges[i+1]], [hist_data[i], hist_data[i]],
+                color=color, linestyle=linestyle, label=label if i == 0 else None,
+                alpha=alpha, linewidth=0.9)
         if i < len(hist_data) - 1:
-            ax.plot(
-                [bin_edges[i + 1], bin_edges[i + 1]],
-                [hist_data[i], hist_data[i + 1]],
-                color=color,
-                linestyle=linestyle,
-                alpha=alpha,
-                linewidth=0.9,
-            )
+            ax.plot([bin_edges[i+1], bin_edges[i+1]], [hist_data[i], hist_data[i+1]],
+                    color=color, linestyle=linestyle, alpha=alpha, linewidth=0.9)
     ax.relim()
     ax.set_ylim((0, None))
     return hist_data, bin_edges
 
 
-def general_hist(
-    iqshots,
-    state_labels,
-    g_states,
-    e_states,
-    e_label="e",
-    check_qubit_label=None,
-    numbins=200,
-    amplitude_mode=False,
-    ps_threshold=None,
-    theta=None,
-    plot=True,
-    verbose=True,
-    fid_avg=False,
-    fit=False,
-    gauss_overlap=False,
-    plotoverlap=False,
-    fitparams=None,
-    normalize=True,
-    title=None,
-    export=False,
-    check_qnd=False,
-):
+def general_hist(iqshots, state_labels, g_states, e_states, e_label="e",
+                 check_qubit_label=None, numbins=200, amplitude_mode=False,
+                 ps_threshold=None, theta=None, plot=True, verbose=True,
+                 fid_avg=False, fit=False, gauss_overlap=False, plotoverlap=False,
+                 fitparams=None, normalize=True, title=None, export=False,
+                 check_qnd=False):
     if numbins is None:
         numbins = 200
 
@@ -197,54 +158,20 @@ def general_hist(
 
         # Scatter Plot
         if plot:
-            axs[0, 0].scatter(
-                I,
-                Q,
-                label=state_label,
-                color=this_color,
-                marker=".",
-                edgecolor="None",
-                alpha=0.1,
-            )
-            axs[0, 0].plot(
-                [np.mean(I)],
-                [np.mean(Q)],
-                color="k",
-                marker=this_marker,
-                markerfacecolor=this_color,
-                markersize=6,
-            )
-            axs[0, 1].scatter(
-                I_new,
-                Q_new,
-                label=state_label,
-                color=this_color,
-                marker=".",
-                edgecolor="None",
-                alpha=0.1,
-            )
-            axs[0, 1].plot(
-                [np.mean(I_new)],
-                [np.mean(Q_new)],
-                color="k",
-                marker=this_marker,
-                markerfacecolor=this_color,
-                markersize=6,
-            )
+            axs[0, 0].scatter(I, Q, label=state_label, color=this_color,
+                              marker=".", edgecolor="None", alpha=0.1)
+            axs[0, 0].plot([np.mean(I)], [np.mean(Q)], color="k",
+                           marker=this_marker, markerfacecolor=this_color, markersize=6)
+            axs[0, 1].scatter(I_new, Q_new, label=state_label, color=this_color,
+                              marker=".", edgecolor="None", alpha=0.1)
+            axs[0, 1].plot([np.mean(I_new)], [np.mean(Q_new)], color="k",
+                           marker=this_marker, markerfacecolor=this_color, markersize=6)
 
         # Histogram Accumulation
         if plot:
-            n, bins = plot_hist(
-                data_to_hist,
-                bins=numbins,
-                ax=axs[1, 0],
-                xlims=xlims,
-                color=this_color,
-                linestyle=this_linestyle,
-                label=state_label,
-                alpha=0.6,
-                normalize=False,
-            )
+            n, bins = plot_hist(data_to_hist, bins=numbins, ax=axs[1, 0], xlims=xlims,
+                                color=this_color, linestyle=this_linestyle,
+                                label=state_label, alpha=0.6, normalize=False)
         else:
             n, bins = np.histogram(data_to_hist, bins=numbins, range=xlims)
 
@@ -263,12 +190,11 @@ def general_hist(
     # --- 5. Fitting ---
     def gaussian_norm(x, b, c):
         a = 1 / (np.sqrt(2 * np.pi) * c)
-        return a * np.exp(-((x - b) ** 2) / (2 * c**2))
+        return a * np.exp(-((x - b) ** 2) / (2 * c ** 2))
 
     def overlap_area_norm(b1, c1, b2, c2):
         def min_func(x):
             return np.minimum(gaussian_norm(x, b1, c1), gaussian_norm(x, b2, c2))
-
         x_min = min(b1 - 5 * c1, b2 - 5 * c2)
         x_max = max(b1 + 5 * c1, b2 + 5 * c2)
         area, _ = quad(min_func, x_min, x_max)
@@ -294,22 +220,10 @@ def general_hist(
             sigma_guess = (bins_dist[-1] - bins_dist[0]) / 20.0
 
         if gauss_overlap:
-            guess_g = [
-                np.max(n_g),
-                xmax_g_val,
-                sigma_guess,
-                np.max(n_g) * 0.1,
-                xmax_e_val,
-                sigma_guess,
-            ]
-            guess_e = [
-                np.max(n_e),
-                xmax_e_val,
-                sigma_guess,
-                np.max(n_e) * 0.2,
-                xmax_g_val,
-                sigma_guess,
-            ]
+            guess_g = [np.max(n_g), xmax_g_val, sigma_guess,
+                       np.max(n_g) * 0.1, xmax_e_val, sigma_guess]
+            guess_e = [np.max(n_e), xmax_e_val, sigma_guess,
+                       np.max(n_e) * 0.2, xmax_g_val, sigma_guess]
             try:
                 popt_g, pcov_g = fit_doublegauss(bin_centers, n_g, guess_g)
                 popt_e, pcov_e = fit_doublegauss(bin_centers, n_e, guess_e)
@@ -350,22 +264,10 @@ def general_hist(
             x_dense = np.linspace(bins_dist[0], bins_dist[-1], 500)
             y_fit_g = fit_func(x_dense, *popt_g)
             y_fit_e = fit_func(x_dense, *popt_e)
-            axs[1, 0].plot(
-                x_dense,
-                y_fit_g,
-                color=default_colors[0],
-                linestyle="-",
-                linewidth=2,
-                label="Fit G",
-            )
-            axs[1, 0].plot(
-                x_dense,
-                y_fit_e,
-                color=default_colors[1],
-                linestyle="-",
-                linewidth=2,
-                label="Fit E",
-            )
+            axs[1, 0].plot(x_dense, y_fit_g, color=default_colors[0],
+                           linestyle="-", linewidth=2, label="Fit G")
+            axs[1, 0].plot(x_dense, y_fit_e, color=default_colors[1],
+                           linestyle="-", linewidth=2, label="Fit E")
 
             if plotoverlap and b_g_plot is not None and b_e_plot is not None:
                 bin_width = bins_dist[1] - bins_dist[0]
@@ -374,9 +276,8 @@ def general_hist(
                 norm_e = gaussian_norm(x_dense, b_e_plot, c_e_plot)
                 scaled_e = norm_e * np.sum(n_e) * bin_width
                 y_overlap = np.minimum(scaled_g, scaled_e)
-                axs[1, 0].fill_between(
-                    x_dense, 0, y_overlap, color="purple", alpha=0.3, label="Overlap"
-                )
+                axs[1, 0].fill_between(x_dense, 0, y_overlap,
+                                        color="purple", alpha=0.3, label="Overlap")
 
     # --- 6. Thresholds & Confusion Matrix ---
     fids = []
@@ -394,12 +295,9 @@ def general_hist(
         fids.append(contrast_ge[tind_ge])
     else:
         fids.append(
-            0.5
-            * (
-                1
-                - n_dist["g"][tind_ge:].sum() / n_dist["g"].sum()
-                + 1
-                - n_dist["e"][:tind_ge].sum() / n_dist["e"].sum()
+            0.5 * (
+                1 - n_dist["g"][tind_ge:].sum() / n_dist["g"].sum()
+                + 1 - n_dist["e"][:tind_ge].sum() / n_dist["e"].sum()
             )
         )
 
@@ -451,12 +349,10 @@ def general_hist(
         fid_title = "$\\overline{F}_{ge}$" if fid_avg else "$F_{ge}$"
         if gauss_overlap:
             axs[1, 0].set_title(
-                f"{fid_title} (Gauss): {100 * gauss_fit_fidelity:.2f}%", fontsize=13
-            )
+                f"{fid_title} (Gauss): {100 * gauss_fit_fidelity:.2f}%", fontsize=13)
         else:
             axs[1, 0].set_title(
-                f"{fid_title} (Thresh): {100 * fids[0]:.2f}%", fontsize=13
-            )
+                f"{fid_title} (Thresh): {100 * fids[0]:.2f}%", fontsize=13)
 
         if ps_threshold is not None:
             axs[1, 0].axvline(ps_threshold, color="gray", linestyle="-.")
@@ -481,15 +377,8 @@ def general_hist(
             for j in range(matrix_size):
                 val = conf_matrix[i, j]
                 text_color = "white" if val > 50 else "black"
-                ax_cm.text(
-                    j,
-                    i,
-                    f"{val:.1f}%",
-                    ha="center",
-                    va="center",
-                    color=text_color,
-                    fontsize=12,
-                )
+                ax_cm.text(j, i, f"{val:.1f}%", ha="center", va="center",
+                           color=text_color, fontsize=12)
 
         ax_cm.set_title("Confusion Matrix (%)")
 
@@ -526,22 +415,10 @@ def general_hist(
     return return_data
 
 
-def hist(
-    data,
-    amplitude_mode=False,
-    ps_threshold=None,
-    theta=None,
-    plot=True,
-    verbose=True,
-    fid_avg=False,
-    fit=False,
-    gauss_overlap=False,
-    plotoverlap=False,
-    fitparams=None,
-    normalize=True,
-    title=None,
-    export=False,
-):
+def hist(data, amplitude_mode=False, ps_threshold=None, theta=None,
+         plot=True, verbose=True, fid_avg=False, fit=False,
+         gauss_overlap=False, plotoverlap=False, fitparams=None,
+         normalize=True, title=None, export=False):
     Ig, Qg = data["Ig"], data["Qg"]
     Ie, Qe = data["Ie"], data["Qe"]
     iqshots = [(Ig, Qg), (Ie, Qe)]
@@ -555,21 +432,11 @@ def hist(
         e_states = [2]
 
     return general_hist(
-        iqshots=iqshots,
-        state_labels=state_labels,
-        g_states=g_states,
-        e_states=e_states,
-        amplitude_mode=amplitude_mode,
-        ps_threshold=ps_threshold,
-        theta=theta,
-        plot=plot,
-        verbose=verbose,
-        fid_avg=fid_avg,
-        fit=fit,
-        gauss_overlap=gauss_overlap,
-        plotoverlap=plotoverlap,
-        fitparams=fitparams,
-        normalize=normalize,
-        title=title,
-        export=export,
+        iqshots=iqshots, state_labels=state_labels,
+        g_states=g_states, e_states=e_states,
+        amplitude_mode=amplitude_mode, ps_threshold=ps_threshold,
+        theta=theta, plot=plot, verbose=verbose,
+        fid_avg=fid_avg, fit=fit, gauss_overlap=gauss_overlap,
+        plotoverlap=plotoverlap, fitparams=fitparams,
+        normalize=normalize, title=title, export=export,
     )

@@ -3,6 +3,7 @@ s006 — Ramsey (ge)
 ===================
 Ramsey fringe / T2*: two pi/2 pulses separated by variable delay.
 """
+
 from .base_program import BaseProgram
 from .base_experiment import BaseExperiment
 from .mock_signals import mock_decaysin, mock_exp_decay
@@ -13,12 +14,20 @@ from ..plotter.plot_utils import plot_final
 class RamseyProgram(BaseProgram):
     def _initialize(self, cfg):
         self.setup_resonator(cfg)
-        self.setup_qubit_gen(cfg, 'ge')
+        self.setup_qubit_gen(cfg, "ge")
         self.add_loop("waitloop", cfg["steps"])
 
-        self.setup_qb_pulse(cfg, 'ge', name="qb_pulse1", gain_key="pi2_gain_ge")
-        ramsey_phase = cfg.get("qb_phase", 0) + cfg["wait_time"] * 360 * cfg["ramsey_freq"]
-        self.setup_qb_pulse(cfg, 'ge', name="qb_pulse2", gain_key="pi2_gain_ge", phase=ramsey_phase)
+        self.setup_qb_pulse(cfg, "ge", name="qb_pulse1", gain_key="pi2_gain_ge")
+        ramsey_phase = (
+            cfg.get("qb_phase", 0) + cfg["wait_time"] * 360 * cfg["ramsey_freq"]
+        )
+        self.setup_qb_pulse(
+            cfg,
+            "ge",
+            name="qb_pulse2",
+            gain_key="pi2_gain_ge",
+            phase=ramsey_phase,
+        )
 
     def _body(self, cfg):
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
@@ -44,8 +53,10 @@ class Ramsey(BaseExperiment):
 
     def _create_program(self):
         return RamseyProgram(
-            self.soccfg, reps=self.cfg["reps"],
-            final_delay=self.cfg["relax_delay"], cfg=self.cfg,
+            self.soccfg,
+            reps=self.cfg["reps"],
+            final_delay=self.cfg["relax_delay"],
+            cfg=self.cfg,
         )
 
     def _extract_sweep_axis(self, prog):
@@ -55,7 +66,9 @@ class Ramsey(BaseExperiment):
     def _simulate(self, x_pts):
         ramsey_freq = self.cfg.get("ramsey_freq", 0.5)
         if ramsey_freq != 0:
-            return mock_decaysin(x_pts, amp=0.5, freq=ramsey_freq, decay=10.0, offset=0.5)
+            return mock_decaysin(
+                x_pts, amp=0.5, freq=ramsey_freq, decay=10.0, offset=0.5
+            )
         else:
             return mock_exp_decay(x_pts, amp=0.5, tau=10.0, offset=0.0)
 
@@ -67,7 +80,8 @@ class Ramsey(BaseExperiment):
             fig.suptitle(
                 f"T2 Ramsey = {self.fit_params[3]:.2f} us, "
                 f"detune = {self.fit_params[1]:.5f}MHz "
-                f"\u00b1 {error[1] * 1e3:.3f}kHz", fontsize=15,
+                f"\u00b1 {error[1] * 1e3:.3f}kHz",
+                fontsize=15,
             )
         else:
             self.fit_params, error, fig = plot_final(
@@ -76,6 +90,19 @@ class Ramsey(BaseExperiment):
             fig.suptitle(f"T2 Ramsey = {self.fit_params[2]:.2f} us", fontsize=15)
         fig.tight_layout()
         return self.fit_params
+
+    def correct_detune(self):
+        if abs(self.fit_params[1] - self.cfg["ramsey_freq"]) > 0.005:
+            self.cfg["qb_freq_ge"] = self.cfg["qb_freq_ge"] - round(
+                (self.fit_params[1] - self.cfg["ramsey_freq"]), 2
+            )
+            print(
+                f"over detune {round((self.fit_params[1] - self.cfg['ramsey_freq']), 5)}MHz"
+            )
+            return round(self.cfg["qb_freq_ge"], 5)
+        else:
+            print("Detune < 5kHz")
+            return self.cfg["qb_freq_ge"]
 
     def _save_comment(self, dict_val):
         return f"T2 Ramsey = {self.fit_params[3]:.2f} us\n{dict_val}"

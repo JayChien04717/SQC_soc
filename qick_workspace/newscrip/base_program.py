@@ -115,36 +115,6 @@ class BaseProgram(AveragerProgramV2):
             gain=cfg[f"res_gain_{prefix}"],
         )
 
-    # ── Mux pulse setup (flexible, prefix-aware) ──
-
-    def set_mux(self, cfg, prefix="ge"):
-        ro_chs = cfg["mux_ro_chs"]
-        res_ch = cfg["mux_gen"]
-
-        self.declare_gen(
-            ch=res_ch,
-            nqz=2,
-            ro_ch=ro_chs[0],
-            mixer_freq=cfg["mixer_freq"],
-            mux_freqs=cfg[f"res_freq_{prefix}"],
-            mux_gains=cfg[f"res_gain_{prefix}"],
-            mux_phases=cfg["res_phase"],
-        )
-        for ch, f, ph in zip(
-            cfg["mux_ro_chs"], cfg[f"res_freq_{prefix}"], cfg["mux_ro_phases"]
-        ):
-            self.declare_readout(
-                ch=ch, length=cfg["ro_length"], freq=f, phase=ph, gen_ch=res_ch
-            )
-
-        self.add_pulse(
-            ch=res_ch,
-            name="readout",
-            style="const",
-            length=cfg["res_length"],
-            mask=cfg["gen_mask"],
-        )
-
     # ── Qubit pulse setup (flexible, prefix-aware) ──
 
     def setup_qb_pulse(
@@ -175,7 +145,7 @@ class BaseProgram(AveragerProgramV2):
             gain_key:     explicit cfg key for gain (default: f"qb_gain_{prefix}")
             gain_override: explicit gain value (overrides gain_key when not None)
             ch:           explicit channel override
-            length_mult:  envelope length = sigma * length_mult (default 5)
+            length_mult:  gauss envelope length = sigma * length_mult (default 5), cosine envelope length = sigma
         """
         # Resolve channel
         if ch is None:
@@ -187,10 +157,7 @@ class BaseProgram(AveragerProgramV2):
 
         # Resolve phase from config if not specified
         if phase is None:
-            if prefix == "ge":
-                phase = cfg.get("qb_phase", 0)
-            else:
-                phase = cfg.get(f"qb_phase_{prefix}", 0)
+            phase = cfg["qb_phase"]
 
         # Resolve gain: gain_override takes precedence over gain_key
         if gain_override is not None:
@@ -198,7 +165,7 @@ class BaseProgram(AveragerProgramV2):
         elif gain_key:
             gain = cfg[gain_key]
         else:
-            gain = cfg.get(f"qb_gain_{prefix}", 0)
+            gain = cfg[f"qb_gain_{prefix}"]
 
         # Resolve frequency
         freq = cfg[f"qb_freq_{prefix}"]
@@ -224,7 +191,7 @@ class BaseProgram(AveragerProgramV2):
                     self.add_cosine(
                         ch=ch,
                         name=env_name,
-                        length=sigma * length_mult,
+                        length=sigma,
                         even_length=True,
                     )
                 else:
@@ -349,8 +316,3 @@ class BaseProgram(AveragerProgramV2):
         """Execute standard readout pulse + trigger."""
         self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
         self.trigger(ros=[cfg["ro_ch"]], pins=[0], t=cfg["trig_time"])
-
-    def measure_mux(self, cfg):
-        """Execute MUX readout pulse + trigger."""
-        self.pulse(ch=cfg["mux_gen"], name="readout", t=0)
-        self.trigger(ros=cfg["mux_ro_chs"], pins=[0], t=0, ddr4=False)

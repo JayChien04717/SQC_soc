@@ -273,7 +273,6 @@ class ExperimentConfig:
 
         # Mux-specific keys
         selected["mux_ro_chs"] = [i + mux_ro_ch_start for i in indices]
-        selected["mux_ro_phases"] = [0] * len(indices)
         selected["gen_mask"] = list(indices)
         selected["mux_gen"] = mux_gen
 

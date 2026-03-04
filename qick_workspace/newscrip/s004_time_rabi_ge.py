@@ -3,21 +3,24 @@ s004 — Time Rabi (ge)
 ======================
 Length Rabi: sweeps qubit pulse length at fixed gain (flat_top only).
 """
+
 from .base_program import BaseProgram
 from .base_experiment import BaseExperiment
 from .mock_signals import mock_rabi_time
-from ..tools.fitting import decaysin, fitdecaysin
+from ..tools.fitting import decaysin, fitdecaysin, fix_phase
 from ..plotter.plot_utils import plot_final
 
 
 class TimeRabiProgram(BaseProgram):
     def _initialize(self, cfg):
         self.setup_resonator(cfg)
-        self.setup_qubit_gen(cfg, 'ge')
+        self.setup_qubit_gen(cfg, "ge")
         self.add_loop("lenloop", cfg["steps"])
         self.setup_qb_pulse(
-            cfg, 'ge', name="qb_pulse",
-            pulse_type="flat_top", gain_key="pi_gain_ge",
+            cfg,
+            "ge",
+            name="qb_pulse",
+            pulse_type="flat_top",
         )
 
     def _body(self, cfg):
@@ -42,8 +45,10 @@ class TimeRabi(BaseExperiment):
 
     def _create_program(self):
         return TimeRabiProgram(
-            self.soccfg, reps=self.cfg["reps"],
-            final_delay=self.cfg["relax_delay"], cfg=self.cfg,
+            self.soccfg,
+            reps=self.cfg["reps"],
+            final_delay=self.cfg["relax_delay"],
+            cfg=self.cfg,
         )
 
     def _extract_sweep_axis(self, prog):
@@ -53,9 +58,17 @@ class TimeRabi(BaseExperiment):
         return mock_rabi_time(x_pts, amp=0.5, freq=5.0, decay=2.0, offset=0.5)
 
     def _post_fit(self, x_vals):
-        self.fit_params, error, fig = plot_final(
-            x_vals, self.iqdata, "Pulse Length (us)", fitdecaysin, decaysin
+        self.fit_params, error, fig, ax = plot_final(
+            x_vals,
+            self.iqdata,
+            "Pulse Length (us)",
+            fitdecaysin,
+            decaysin,
+            return_ax=True,
         )
-        fig.suptitle("Time Rabi ge")
+        pi_len, pi2_len = fix_phase(self.fit_params)
+        ax.axvline(pi_len, color="red", linestyle="--", label=r"$\pi$ Length")
+        ax.axvline(pi2_len, color="red", linestyle="--", label=r"$\pi/2$ Length")
+        fig.suptitle(f"Time Rabi ge, Rabi frequency = {self.fit_params[1]:.2f} MHz")
         fig.tight_layout()
-        return self.fit_params
+        return pi_len, pi2_len
