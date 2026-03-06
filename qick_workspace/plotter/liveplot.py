@@ -259,6 +259,7 @@ def _liveplot_sw_avg(
                 transform=final_ax.transAxes,
             )
         display(final_fig)
+        plt.close(final_fig)
 
     return iqdata, interrupted, last_i + 1
 
