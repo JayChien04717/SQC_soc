@@ -63,3 +63,6 @@ class QubitSpec(BaseExperiment):
         fig.tight_layout()
         self.fit_params = fit_params
         return round(fit_params[2], 6)
+
+    def _save_comment(self, dict_val):
+        return f"f_q_ge = {self.fit_params[2]:.4f} MHz, \n{dict_val}"

@@ -3,6 +3,7 @@ s013 — T1 (ef)
 ================
 T1 decay on ef: ge pi -> ef pi -> wait -> readout.
 """
+
 from .base_program import BaseProgram
 from .base_experiment import BaseExperiment
 from .mock_signals import mock_exp_decay
@@ -13,11 +14,11 @@ from ..plotter.plot_utils import plot_final
 class T1EfProgram(BaseProgram):
     def _initialize(self, cfg):
         self.setup_resonator(cfg)
-        self.setup_qubit_gen(cfg, 'ge')
-        self.setup_qubit_gen(cfg, 'ef')
+        self.setup_qubit_gen(cfg, "ge")
+        self.setup_qubit_gen(cfg, "ef")
         self.add_loop("waitloop", cfg["steps"])
-        self.setup_qb_pulse(cfg, 'ge', name="qb_pi_pulse", gain_key="pi_gain_ge")
-        self.setup_qb_pulse(cfg, 'ef', name="qb_pulse", gain_key="pi_gain_ef")
+        self.setup_qb_pulse(cfg, "ge", name="qb_pi_pulse", gain_key="pi_gain_ge")
+        self.setup_qb_pulse(cfg, "ef", name="qb_pulse", gain_key="pi_gain_ef")
 
     def _body(self, cfg):
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
@@ -47,8 +48,10 @@ class T1_ef(BaseExperiment):
 
     def _create_program(self):
         return T1EfProgram(
-            self.soccfg, reps=self.cfg["reps"],
-            final_delay=self.cfg["relax_delay"], cfg=self.cfg,
+            self.soccfg,
+            reps=self.cfg["reps"],
+            final_delay=self.cfg["relax_delay"],
+            cfg=self.cfg,
         )
 
     def _extract_sweep_axis(self, prog):
@@ -67,4 +70,4 @@ class T1_ef(BaseExperiment):
         return self.fit_params
 
     def _save_comment(self, dict_val):
-        return f"T1 = {self.fit_params[2]:.2f} us {dict_val}"
+        return f"T1 = {self.fit_params[2]:.2f} us \n{dict_val}"

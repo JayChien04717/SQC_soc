@@ -87,7 +87,11 @@ class BaseProgram(AveragerProgramV2):
 
     # ── Resonator setup ──
 
-    def setup_resonator(self, cfg, prefix="ge"):
+    def setup_resonator(
+        self,
+        cfg,
+        prefix="ge",
+    ):
         """Configure resonator readout channel and flat_top pulse."""
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]

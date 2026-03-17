@@ -89,7 +89,7 @@ class Ramsey(BaseExperiment):
             )
             fig.suptitle(f"T2 Ramsey = {self.fit_params[2]:.2f} us", fontsize=15)
         fig.tight_layout()
-        return self.fit_params
+        return self.fit_params, error
 
     def correct_detune(self):
         if abs(self.fit_params[1] - self.cfg["ramsey_freq"]) > 0.005:
@@ -105,4 +105,7 @@ class Ramsey(BaseExperiment):
             return self.cfg["qb_freq_ge"]
 
     def _save_comment(self, dict_val):
-        return f"T2 Ramsey = {self.fit_params[3]:.2f} us\n{dict_val}"
+        if self.cfg["ramsey_freq"] != 0:
+            return f"T2 Ramsey = {self.fit_params[3]:.2f} us\n{dict_val}"
+        else:
+            return f"T2 Ramsey = {self.fit_params[2]:.2f} us\n{dict_val}"

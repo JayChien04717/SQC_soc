@@ -69,7 +69,7 @@ class BaseExperiment:
     # Unified entry point
     # ══════════════════════════════════════════════
 
-    def run(self, py_avg, simulate=False, **kwargs):
+    def run(self, py_avg, simulate=False, show_final_plot=False, **kwargs):
         """
         Execute the experiment with liveplot, or simulate without hardware.
 
@@ -138,7 +138,7 @@ class BaseExperiment:
             title_prefix=self.TITLE_PREFIX,
             yoko_inst_addr=kwargs.get("yoko_inst_addr"),
             yoko_mode=kwargs.get("yoko_mode", "current"),
-            show_final_plot=False,
+            show_final_plot=show_final_plot,
         )
 
         if self.iqdata is None:
@@ -157,7 +157,7 @@ class BaseExperiment:
     # Unified save
     # ══════════════════════════════════════════════
 
-    def saveLabber(self, qb_idx, yoko_value=None, config_all=None):
+    def saveLabber(self, qb_idx, yoko_value=None, config_all=None, title=None):
         """
         Save data to HDF5 (Labber) format.
 
@@ -168,7 +168,10 @@ class BaseExperiment:
                         If provided → nested YAML via config_all.to_yaml(q_id).
                         If None → flat YAML via config_to_yaml(self.cfg).
         """
-        expt_name = f"{self.EXPT_NAME}_{qb_idx}"
+        if title is not None:
+            expt_name = f"{self.EXPT_NAME}_{qb_idx}_{title}"
+        else:
+            expt_name = f"{self.EXPT_NAME}_{qb_idx}"
         file_path = get_next_filename_labber(DATA_PATH, expt_name, yoko_value)
 
         if config_all is not None:

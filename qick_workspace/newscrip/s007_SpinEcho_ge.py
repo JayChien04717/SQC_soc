@@ -90,7 +90,7 @@ class SpinEcho(BaseExperiment):
             )
             fig.suptitle(f"T2 Echo = {self.fit_params[2]:.2f} us", fontsize=15)
         fig.tight_layout()
-        return self.fit_params
+        return self.fit_params, error
 
     def _save_comment(self, dict_val):
         if self.cfg["ramsey_freq"] != 0:
