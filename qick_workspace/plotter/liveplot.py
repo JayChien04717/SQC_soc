@@ -30,9 +30,10 @@ def liveplotfun(
     # --- Yoko-specific parameters ---
     yoko_inst_addr=None,
     yoko_mode="current",
-    # --- 1D Scan specific ---
-    scan_x_axis=None,  # If provided, enables 1D parameter scan mode
-    get_prog_callback=None,  # Callback function to dynamically generate programs for 1D scan
+    # --- Parameter Scan specific ---
+    scan_x_axis=None,  # If provided, enables parameter scan mode
+    scan_y_axis=None,  # If provided alongside scan_x_axis, enables 2D parameter scan mode
+    get_prog_callback=None,  # Callback function to dynamically generate programs
     # --- General ---
     show_final_plot=True,
 ):
@@ -58,21 +59,35 @@ def liveplotfun(
             title_prefix=title_prefix,
         )
 
-    # Mode 2: 1D Parameter Scan (e.g., Length Rabi, T1)
+    # Mode 2: Parameter Scan (1D or 2D)
     elif scan_x_axis is not None:
         if get_prog_callback is None:
             raise ValueError(
-                "get_prog_callback must be provided for 1D parameter scan."
+                "get_prog_callback must be provided for parameter scan."
             )
-        return _liveplot_1d_scan(
-            soc=soc,
-            py_avg=py_avg,
-            scan_x_axis=scan_x_axis,
-            get_prog_callback=get_prog_callback,
-            x_label=x_label,
-            title_prefix=title_prefix,
-            show_final_plot=show_final_plot,
-        )
+        
+        if scan_y_axis is not None:
+            return _liveplot_2d_scan(
+                soc=soc,
+                py_avg=py_avg,
+                scan_x_axis=scan_x_axis,
+                scan_y_axis=scan_y_axis,
+                get_prog_callback=get_prog_callback,
+                x_label=x_label,
+                y_label=y_label,
+                title_prefix=title_prefix,
+                show_final_plot=show_final_plot,
+            )
+        else:
+            return _liveplot_1d_scan(
+                soc=soc,
+                py_avg=py_avg,
+                scan_x_axis=scan_x_axis,
+                get_prog_callback=get_prog_callback,
+                x_label=x_label,
+                title_prefix=title_prefix,
+                show_final_plot=show_final_plot,
+            )
 
     # Mode 3: Software Averaging (Default 1D or 2D repeat)
     else:
@@ -478,3 +493,87 @@ def _liveplot_1d_scan(
 
     plt.close(fig)
     return iqdata, interrupted, last_avg + 1
+
+
+# ===================================================================
+# 5. Internal Function: 2D Parameter Scan (NEW)
+# ===================================================================
+def _liveplot_2d_scan(
+    soc,
+    py_avg,
+    scan_x_axis,
+    scan_y_axis,
+    get_prog_callback,
+    x_label="X Axis",
+    y_label="Y Axis",
+    title_prefix="2D Scan",
+    show_final_plot=True,
+):
+    """
+    [Internal function] Executes a 2D software parameter scan with live plotting.
+    'get_prog_callback' is a function that takes (x_val, y_val) and returns a ready-to-run program.
+    """
+    iqdata_full = np.zeros((len(scan_y_axis), len(scan_x_axis)), dtype=complex)
+    data_to_plot = np.zeros((len(scan_y_axis), len(scan_x_axis)))
+    interrupted = False
+    last_y_idx, last_x_idx = 0, 0
+
+    fig, ax = plt.subplots(figsize=(6, 4))
+    
+    mesh = ax.pcolormesh(
+        scan_x_axis, scan_y_axis, data_to_plot,
+        shading="auto", cmap="viridis",
+    )
+    fig.colorbar(mesh, ax=ax, label="ADC Units (Abs)")
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+    ax.set_title(f"{title_prefix} (Initializing...)")
+    
+    plot_display_id = f"live-plot-2d-scan-{np.random.randint(1e9)}"
+    display(fig, display_id=plot_display_id)
+
+    try:
+        # Software 2D sweeps compile often, so it's much faster to accumulate all py_avg shots at the 
+        # innermost level by using py_avg in the acquire command (as in the 1D parameter search).
+        for y_idx, y_val in enumerate(tqdm(scan_y_axis, desc=f"Outer Sweep: {y_label}")):
+            last_y_idx = y_idx
+            for x_idx, x_val in enumerate(tqdm(scan_x_axis, desc=f"Inner Sweep: {x_label}", leave=False)):
+                last_x_idx = x_idx
+                
+                prog = get_prog_callback(x_val, y_val)
+                # Note: Py_avg here effectively acts as soft_avgs for the specific (X, Y) point
+                iq_list = prog.acquire(soc, rounds=py_avg, progress=False)
+                iq_data_pt = iq_list[0][0].dot([1, 1j])
+                
+                iqdata_full[y_idx, x_idx] = iq_data_pt
+                data_to_plot = np.abs(iqdata_full)
+                
+                mesh.set_array(data_to_plot.ravel())
+                current_max = np.max(data_to_plot)
+                if current_max > 0:
+                    mesh.set_clim(vmin=np.min(data_to_plot), vmax=current_max)
+                    
+                ax.set_title(f"{title_prefix} | {y_label}={y_val:.2f}, {x_label}={x_val:.2f}")
+                update_display(fig, display_id=plot_display_id)
+
+    except KeyboardInterrupt:
+        interrupted = True
+
+    clear_output(wait=True)
+    if interrupted:
+        print(f"Scan interrupted at {y_label}: {scan_y_axis[last_y_idx]}, {x_label}: {scan_x_axis[last_x_idx]}")
+
+    ax.cla()
+    title_status = "Interrupted" if interrupted else "Completed"
+    ax.set_title(f"{title_prefix} ({title_status})")
+    ax.set_xlabel(x_label)
+    ax.set_ylabel(y_label)
+
+    im = ax.pcolormesh(scan_x_axis, scan_y_axis, data_to_plot, shading="auto", cmap="viridis")
+
+    if show_final_plot:
+        display(fig)
+        
+    plt.close(fig)
+
+    return iqdata_full, interrupted, py_avg

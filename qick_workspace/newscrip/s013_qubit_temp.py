@@ -149,7 +149,6 @@ class QubitTemperatureEf(BaseExperiment):
         return T_K
 
     def _solve_temperature(self, A_meas, A_ref, fge_Hz, fef_Hz):
-        # 修正：定義 ratio 為 Ref / Meas (通常 < 1)
         ratio = A_meas / A_ref
 
         if not self._full_model:
@@ -246,7 +245,6 @@ class QubitTemperatureEf(BaseExperiment):
             f"{self.TITLE_PREFIX}\n"
             f"A_meas={A_meas:.4f}, A_ref={A_ref:.4f}, ratio={A_ref / A_meas:.4f}\n"
             f"T = {T_K * 1e3:.2f} mK"
-            + (" [full 3-level]" if self._full_model else " [P_f≈0]")
         )
         ax.set_title(title_info, fontsize=11)
         ax.legend(fontsize=9, loc="best")
