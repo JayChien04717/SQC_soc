@@ -4,10 +4,8 @@ import numpy as np
 import time
 from tqdm.auto import tqdm
 
-class YOKOGS200:
-    _rampstep = 1e-4  # 0.0001 #0.001 # increment step when setting voltage/current
-    _rampinterval = 0.01  # dwell time for each voltage step # Default MATLAB is 0.01, CANNOT be lower than 0.001 otherwise fridge heats up
 
+class YOKOGS200:
     # Initializes session for device.
     # VISAaddress: address of device, rm: VISA resource manager
     def __init__(self, VISAaddress, rm):
@@ -17,6 +15,9 @@ class YOKOGS200:
         except visa.Error as ex:
             sys.stderr.write("Couldn't connect to '%s', exiting now..." % VISAaddress)
             sys.exit()
+        self.voltage_ramp_step = 1e-5  # Step size for voltage ramp
+        self.current_ramp_step = 1e-8  # Step size for current ramp
+        self.ramp_interval = 0.01  # Dwell time (s) for each ramp step
 
     # ==========================================================================#
 
@@ -32,28 +33,28 @@ class YOKOGS200:
 
     # Ramp up the voltage (volts) in increments of _rampstep, waiting _rampinterval
     # between each increment.
-    def SetVoltage(self, voltage, _rampstep=1e-2):
+    def SetVoltage(self, voltage):
         start = self.GetVoltage()
         stop = voltage
-        steps = max(1, round(abs(stop - start) / _rampstep))
+        steps = max(1, round(abs(stop - start) / self.voltage_ramp_step))
         tempvolts = np.linspace(start, stop, num=steps + 1, endpoint=True)
         # print(tempvolts)
         self.OutputOn()
-        for tempvolt in tqdm(tempvoltsdesc="Setting Voltage", leave=False):
+        for tempvolt in tqdm(tempvolts, desc="Setting Voltage", leave=False):
             self.session.write(":SOURce:LEVel:AUTO %.8f" % tempvolt)
-            time.sleep(self._rampinterval)
+            time.sleep(self.ramp_interval)
 
     # Ramp up the current (amps) in increments of _rampstep, waiting _rampinterval
     # between each increment.
-    def SetCurrent(self, current, _rampstep=1e-6):
+    def SetCurrent(self, current):
         start = self.GetCurrent()
         stop = current
-        steps = max(1, round(abs(stop - start) / _rampstep))
+        steps = max(1, round(abs(stop - start) / self.current_ramp_step))
         tempcurrents = np.linspace(start, stop, num=steps)
         self.OutputOn()
         for tempcurrent in tqdm(tempcurrents, desc="Setting Current", leave=False):
             self.session.write(":SOURce:LEVel:AUTO %.8f" % tempcurrent)
-            time.sleep(self._rampinterval)
+            time.sleep(self.ramp_interval)
 
     # Set to either current or voltage mode.
     def SetMode(self, mode):

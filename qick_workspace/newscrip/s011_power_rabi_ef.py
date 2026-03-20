@@ -3,6 +3,7 @@ s011 — Power Rabi (ef)
 =======================
 Amplitude Rabi on ef: ge pi pulse first, then sweep ef drive gain.
 """
+
 from .base_program import BaseProgram
 from .base_experiment import BaseExperiment
 from .mock_signals import mock_decaysin
@@ -13,11 +14,11 @@ from ..plotter.plot_utils import plot_final
 class PowerRabiEfProgram(BaseProgram):
     def _initialize(self, cfg):
         self.setup_resonator(cfg)
-        self.setup_qubit_gen(cfg, 'ge')
-        self.setup_qubit_gen(cfg, 'ef')
+        self.setup_qubit_gen(cfg, "ge")
+        self.setup_qubit_gen(cfg, "ef")
         self.add_loop("gainloop", cfg["steps"])
-        self.setup_qb_pulse(cfg, 'ge', name="qb_pi_pulse", gain_key="pi_gain_ge")
-        self.setup_qb_pulse(cfg, 'ef', name="qb_pulse_ef")
+        self.setup_qb_pulse(cfg, "ge", name="qb_pi_pulse", gain_key="pi_gain_ge")
+        self.setup_qb_pulse(cfg, "ef", name="qb_pulse_ef")
 
     def _body(self, cfg):
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
@@ -27,9 +28,9 @@ class PowerRabiEfProgram(BaseProgram):
         self.pulse(ch=cfg["qb_ch"], name="qb_pi_pulse", t=0)
         self.delay_auto(0.02)
         self.pulse(ch=cfg["qb_ch_ef"], name="qb_pulse_ef", t=0)
+        self.delay_auto(0.02)
         if cfg.get("ge_ref", False):
             self.pulse(ch=cfg["qb_ch"], name="qb_pi_pulse", t=0)
-            self.delay_auto(0.01)
         self.delay_auto(0.02)
         self.measure(cfg)
 
@@ -46,8 +47,10 @@ class PowerRabi_ef(BaseExperiment):
 
     def _create_program(self):
         return PowerRabiEfProgram(
-            self.soccfg, reps=self.cfg["reps"],
-            final_delay=self.cfg["relax_delay"], cfg=self.cfg,
+            self.soccfg,
+            reps=self.cfg["reps"],
+            final_delay=self.cfg["relax_delay"],
+            cfg=self.cfg,
         )
 
     def _extract_sweep_axis(self, prog):
@@ -59,7 +62,11 @@ class PowerRabi_ef(BaseExperiment):
 
     def _post_fit(self, x_vals):
         self.fit_params, error, fig, ax = plot_final(
-            x_vals, self.iqdata, "Dac Gain(a.u)", fitdecaysin, decaysin,
+            x_vals,
+            self.iqdata,
+            "Dac Gain(a.u)",
+            fitdecaysin,
+            decaysin,
             return_ax=True,
         )
         fig.suptitle("Power Rabi ef")

@@ -1,4 +1,4 @@
-DATA_PATH = r"D:\Labber_Data\Jay\purcell_tmon\temperature"
+DATA_PATH = r"D:\Labber_Data\Jay\purcell_tmon\still"
 
 
 config_list = [

@@ -8,7 +8,7 @@ config_list = [
         "res": {
             "res_freq_ge": 6720.4009,
             "res_length": 10,
-            "res_gain_ge": 0.8,
+            "res_gain_ge": 0.5,
             "res_phase": 0,
             "res_sigma": 0.005,
             "ro_length": 5,
@@ -111,7 +111,7 @@ config_list = [
         "res": {
             "res_freq_ge": 6810.8901,
             "res_length": 10,
-            "res_gain_ge": 0.8,
+            "res_gain_ge": 0.5,
             "res_phase": 0,
             "res_sigma": 0.005,
             "ro_length": 5,
@@ -120,7 +120,7 @@ config_list = [
         },
         "qb": {
             "pulse_type": "arb",
-            "qb_freq_ge": 3127.600198,
+            "qb_freq_ge": 3127.67887,
             "qb_mixer": 3127.600198,
             "qb_gain_ge": 0.1,
             "qb_phase": 0,
@@ -163,7 +163,7 @@ config_list = [
         "res": {
             "res_freq_ge": 6883.7547,
             "res_length": 10,
-            "res_gain_ge": 0.8,
+            "res_gain_ge": 0.7,
             "res_phase": 0,
             "res_sigma": 0.005,
             "ro_length": 5,
@@ -172,7 +172,7 @@ config_list = [
         },
         "qb": {
             "pulse_type": "arb",
-            "qb_freq_ge": 3311.82327,
+            "qb_freq_ge": 3311.94,
             "qb_mixer": 3313.053269,
             "qb_gain_ge": 0.1,
             "qb_phase": 0,
