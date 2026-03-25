@@ -91,15 +91,19 @@ class BaseExperiment:
                 self.iqdata = self._simulate(self._sweep_vals, self._sweep_vals_y)
 
                 # Show static plot (2D)
+                swap_xy = kwargs.get("swap_xy", False)
+                plot_x = self._sweep_vals_y if swap_xy else self._sweep_vals
+                plot_y = self._sweep_vals if swap_xy else self._sweep_vals_y
+                plot_xlabel = self.Y_LABEL if swap_xy else self.X_LABEL
+                plot_ylabel = self.X_LABEL if swap_xy else self.Y_LABEL
+                plot_data = np.abs(self.iqdata).T if swap_xy else np.abs(self.iqdata)
+
                 fig, ax = plt.subplots(figsize=(6, 5))
                 pcm = ax.pcolormesh(
-                    self._sweep_vals,
-                    self._sweep_vals_y,
-                    np.abs(self.iqdata),
-                    shading="auto",
+                    plot_x, plot_y, plot_data, shading="auto"
                 )
-                ax.set_xlabel(self.X_LABEL)
-                ax.set_ylabel(self.Y_LABEL)
+                ax.set_xlabel(plot_xlabel)
+                ax.set_ylabel(plot_ylabel)
                 ax.set_title(f"{self.TITLE_PREFIX} [SIMULATED]")
                 fig.colorbar(pcm, ax=ax, label="ADC Units (Abs)")
                 fig.tight_layout()
@@ -120,6 +124,10 @@ class BaseExperiment:
                 fig.tight_layout()
                 plt.show()
 
+            import inspect
+            sig = inspect.signature(self._post_fit)
+            if 'y_vals' in sig.parameters or any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
+                return self._post_fit(self._sweep_vals, y_vals=self._sweep_vals_y)
             return self._post_fit(self._sweep_vals)
 
         # ── Normal hardware mode ──
@@ -139,6 +147,7 @@ class BaseExperiment:
             yoko_inst_addr=kwargs.get("yoko_inst_addr"),
             yoko_mode=kwargs.get("yoko_mode", "current"),
             show_final_plot=show_final_plot,
+            swap_xy=kwargs.get("swap_xy", False),
         )
 
         if self.iqdata is None:
@@ -151,6 +160,10 @@ class BaseExperiment:
                 "Fit is based on partial data."
             )
 
+        import inspect
+        sig = inspect.signature(self._post_fit)
+        if 'y_vals' in sig.parameters or any(p.kind == p.VAR_KEYWORD for p in sig.parameters.values()):
+            return self._post_fit(self._sweep_vals_x, y_vals=self._sweep_vals_y)
         return self._post_fit(self._sweep_vals_x)
 
     # ══════════════════════════════════════════════
@@ -230,9 +243,10 @@ class BaseExperiment:
     # Subclass MAY override (hooks)
     # ══════════════════════════════════════════════
 
-    def _post_fit(self, x_vals):
+    def _post_fit(self, x_vals, y_vals=None, **kwargs):
         """
         Optional hook: perform fitting after liveplot and return the result.
+        Can optionally accept y_vals for 2D experiments.
         Default: no fitting.
         """
         return None

@@ -36,6 +36,7 @@ def liveplotfun(
     get_prog_callback=None,  # Callback function to dynamically generate programs
     # --- General ---
     show_final_plot=True,
+    swap_xy=False,
 ):
     """
     General-purpose live plotter (Facade pattern).
@@ -57,6 +58,7 @@ def liveplotfun(
             x_label=x_label,
             y_label=y_label,
             title_prefix=title_prefix,
+            swap_xy=swap_xy,
         )
 
     # Mode 2: Parameter Scan (1D or 2D)
@@ -77,6 +79,7 @@ def liveplotfun(
                 y_label=y_label,
                 title_prefix=title_prefix,
                 show_final_plot=show_final_plot,
+                swap_xy=swap_xy,
             )
         else:
             return _liveplot_1d_scan(
@@ -101,6 +104,7 @@ def liveplotfun(
             y_label=y_label,
             title_prefix=title_prefix,
             show_final_plot=show_final_plot,
+            swap_xy=swap_xy,
         )
 
 
@@ -117,6 +121,7 @@ def _liveplot_sw_avg(
     y_label="Y Axis",
     title_prefix="Experiment",
     show_final_plot=False,
+    swap_xy=False,
 ):
     """
     [Internal function] Executes a software-averaged live plot (1D or 2D) using a separate, persistent thread
@@ -144,22 +149,27 @@ def _liveplot_sw_avg(
     # Pre-create plot artists (Lines or QuadMesh) to be updated later
     if is_2d:
         # For 2D plots, initialize with zeros
+        plot_x = y_axis_vals if swap_xy else x_axis_vals
+        plot_y = x_axis_vals if swap_xy else y_axis_vals
+        plot_xlabel = y_label if swap_xy else x_label
+        plot_ylabel = x_label if swap_xy else y_label
+        
         plot_artist = ax.pcolormesh(
-            x_axis_vals,
-            y_axis_vals,
-            np.zeros((len(y_axis_vals), len(x_axis_vals))),
+            plot_x,
+            plot_y,
+            np.zeros((len(plot_y), len(plot_x))),
             cmap="viridis",
         )
         fig.colorbar(plot_artist, ax=ax, label="Normalized Amplitude")
-        ax.set_ylabel(y_label)
+        ax.set_ylabel(plot_ylabel)
+        ax.set_xlabel(plot_xlabel)
     else:
         # For 1D plots, initialize an empty line
         (plot_artist,) = ax.plot(
             x_axis_vals, np.zeros_like(x_axis_vals), "o-", markersize=5, alpha=0.7
         )
         ax.set_ylabel("ADC Units (Abs)")
-
-    ax.set_xlabel(x_label)
+        ax.set_xlabel(x_label)
     ax.set_title(f"{title_prefix} (Initializing...)")
 
     # --- Consumer Thread (Plotter) ---
@@ -173,7 +183,7 @@ def _liveplot_sw_avg(
 
             # Efficiently update existing plot artists instead of clearing and redrawing
             if is_2d:
-                plot_artist.set_array(data.ravel())
+                plot_artist.set_array(data.T.ravel() if swap_xy else data.ravel())
                 # Optional: dynamically update color scale for better contrast
                 plot_artist.set_clim(vmin=np.min(data), vmax=np.max(data))
             else:
@@ -245,8 +255,6 @@ def _liveplot_sw_avg(
         final_fig, final_ax = plt.subplots(figsize=(6, 4))
         title_status = "Interrupted" if interrupted else "Completed"
         final_ax.set_title(f"{title_prefix} ({title_status} at avg {last_i + 1})")
-        final_ax.set_xlabel(x_label)
-
         if iqdata is not None:
             plot_data_abs = np.abs(iqdata)
             if is_2d:
@@ -256,12 +264,22 @@ def _liveplot_sw_avg(
                 ranges = row_maxs - row_mins
                 ranges[ranges == 0] = 1
                 final_data = (plot_data_abs - row_mins) / ranges
+                
+                plot_x = y_axis_vals if swap_xy else x_axis_vals
+                plot_y = x_axis_vals if swap_xy else y_axis_vals
+                plot_data_to_draw = final_data.T if swap_xy else final_data
+                plot_ylabel = x_label if swap_xy else y_label
+                plot_xlabel = y_label if swap_xy else x_label
+                
+                final_ax.set_xlabel(plot_xlabel)
+                final_ax.set_ylabel(plot_ylabel)
+
                 im = final_ax.pcolormesh(
-                    x_axis_vals, y_axis_vals, final_data, cmap="viridis"
+                    plot_x, plot_y, plot_data_to_draw, cmap="viridis"
                 )
                 final_fig.colorbar(im, ax=final_ax, label="Normalized Amplitude")
-                final_ax.set_ylabel(y_label)
             else:
+                final_ax.set_xlabel(x_label)
                 final_ax.plot(x_axis_vals, plot_data_abs, "o-", markersize=5, alpha=0.7)
                 final_ax.set_ylabel("ADC Units (Abs)")
         else:
@@ -293,6 +311,7 @@ def _liveplot_sweep_yoko(
     x_label="X Axis",
     y_label="Y Axis",
     title_prefix="Experiment",
+    swap_xy=False,
 ):
     rm = pyvisa.ResourceManager()
     yoko = YOKOGS200(yoko_inst_addr, rm)
@@ -317,13 +336,24 @@ def _liveplot_sweep_yoko(
         dynamic_x_label = y_label
         current_yoko_unit = yoko_unit  # 如果 auto_unit 失敗，使用原始單位
 
-    plot_y_vals = x_axis_vals
-    dynamic_y_label = x_label
+    if not swap_xy:
+        plot_x_vals = plot_x_vals
+        plot_y_vals = x_axis_vals
+        dynamic_x_label = dynamic_x_label
+        dynamic_y_label = x_label
+        plot_data_func = lambda d: d.T
+    else:
+        # Swap implies X=x_axis, Y=yoko
+        dynamic_y_label = dynamic_x_label
+        dynamic_x_label = x_label
+        plot_y_vals = plot_x_vals
+        plot_x_vals = x_axis_vals
+        plot_data_func = lambda d: d
 
     mesh = ax.pcolormesh(
         plot_x_vals,
         plot_y_vals,
-        data_to_plot.T,
+        plot_data_func(data_to_plot),
         shading="nearest",
         cmap="viridis",
     )
@@ -356,7 +386,7 @@ def _liveplot_sweep_yoko(
             iqdata_full[idx, :] = iq_data_row
             data_to_plot = np.abs(iqdata_full)
 
-            mesh.set_array(data_to_plot.T.ravel())
+            mesh.set_array(plot_data_func(data_to_plot).ravel())
 
             current_max = np.max(data_to_plot)
             if current_max > 0:
@@ -384,7 +414,7 @@ def _liveplot_sweep_yoko(
     ax.set_xlabel(dynamic_x_label)
     ax.set_ylabel(dynamic_y_label)
 
-    im = ax.pcolormesh(plot_x_vals, plot_y_vals, data_to_plot.T, shading="nearest")
+    im = ax.pcolormesh(plot_x_vals, plot_y_vals, plot_data_func(data_to_plot), shading="nearest")
     fig.colorbar(im, ax=ax, label="Amplitude")
 
     display(fig)
@@ -508,6 +538,7 @@ def _liveplot_2d_scan(
     y_label="Y Axis",
     title_prefix="2D Scan",
     show_final_plot=True,
+    swap_xy=False,
 ):
     """
     [Internal function] Executes a 2D software parameter scan with live plotting.
@@ -518,15 +549,18 @@ def _liveplot_2d_scan(
     interrupted = False
     last_y_idx, last_x_idx = 0, 0
 
-    fig, ax = plt.subplots(figsize=(6, 4))
-    
+    plot_x = scan_y_axis if swap_xy else scan_x_axis
+    plot_y = scan_x_axis if swap_xy else scan_y_axis
+    plot_xlabel = y_label if swap_xy else x_label
+    plot_ylabel = x_label if swap_xy else y_label
+
     mesh = ax.pcolormesh(
-        scan_x_axis, scan_y_axis, data_to_plot,
+        plot_x, plot_y, data_to_plot.T if swap_xy else data_to_plot,
         shading="auto", cmap="viridis",
     )
     fig.colorbar(mesh, ax=ax, label="ADC Units (Abs)")
-    ax.set_xlabel(x_label)
-    ax.set_ylabel(y_label)
+    ax.set_xlabel(plot_xlabel)
+    ax.set_ylabel(plot_ylabel)
     ax.set_title(f"{title_prefix} (Initializing...)")
     
     plot_display_id = f"live-plot-2d-scan-{np.random.randint(1e9)}"
@@ -548,7 +582,7 @@ def _liveplot_2d_scan(
                 iqdata_full[y_idx, x_idx] = iq_data_pt
                 data_to_plot = np.abs(iqdata_full)
                 
-                mesh.set_array(data_to_plot.ravel())
+                mesh.set_array((data_to_plot.T if swap_xy else data_to_plot).ravel())
                 current_max = np.max(data_to_plot)
                 if current_max > 0:
                     mesh.set_clim(vmin=np.min(data_to_plot), vmax=current_max)
@@ -566,10 +600,10 @@ def _liveplot_2d_scan(
     ax.cla()
     title_status = "Interrupted" if interrupted else "Completed"
     ax.set_title(f"{title_prefix} ({title_status})")
-    ax.set_xlabel(x_label)
-    ax.set_ylabel(y_label)
+    ax.set_xlabel(plot_xlabel)
+    ax.set_ylabel(plot_ylabel)
 
-    im = ax.pcolormesh(scan_x_axis, scan_y_axis, data_to_plot, shading="auto", cmap="viridis")
+    im = ax.pcolormesh(plot_x, plot_y, data_to_plot.T if swap_xy else data_to_plot, shading="auto", cmap="viridis")
 
     if show_final_plot:
         display(fig)
