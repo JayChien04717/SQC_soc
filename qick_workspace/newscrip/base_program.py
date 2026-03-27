@@ -236,7 +236,13 @@ class BaseProgram(AveragerProgramV2):
             )
         elif pulse_type == "drag":
             try:
-                delta = cfg["qb_freq_ge"] - cfg["qb_freq_ef"]
+                if (
+                    cfg.get("delta", cfg.get("qb_freq_ge") - cfg.get("qb_freq_ef"))
+                    is None
+                ):
+                    raise ValueError(
+                        "Delta/anharmonicity must be specified for DRAG pulse."
+                    )
             except KeyError as e:
                 raise ValueError(f"Missing required anharmonicity key: {e}")
             alpha = cfg.get("drag_alpha", 0.5)
