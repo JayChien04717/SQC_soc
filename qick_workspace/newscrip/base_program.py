@@ -234,6 +234,21 @@ class BaseProgram(AveragerProgramV2):
                 gain=gain,
                 length=cfg[f"qb_flat_top_length_{prefix}"],
             )
+        elif pulse_type == "drag":
+            try:
+                delta = cfg["qb_freq_ge"] - cfg["qb_freq_ef"]
+            except KeyError as e:
+                raise ValueError(f"Missing required anharmonicity key: {e}")
+            alpha = cfg.get("drag_alpha", 0.5)
+            self.add_DRAG(
+                ch=ch,
+                name=name,
+                sigma=cfg[f"sigma_{prefix}"],
+                length=cfg[f"sigma_{prefix}"] * length_mult,
+                delta=delta,
+                alpha=alpha,
+                even_length=True,
+            )
 
     def setup_standard_gates(self, cfg, prefix="ge", pulse_type=None, shape="gauss"):
         """

@@ -1,4 +1,4 @@
-DATA_PATH = "test"
+DATA_PATH = r"D:\Labber_Data\Jay\purcell_tmon\Rshield"
 
 
 config_list = [
@@ -12,7 +12,7 @@ config_list = [
             "ro_ch": 0,
         },
         "res": {
-            "res_freq_ge": 7442.11247707380,
+            "res_freq_ge": 6717,
             "res_length": 10,
             "res_gain_ge": 0.2,
             "res_phase": 0,
@@ -23,8 +23,8 @@ config_list = [
         },
         "qb": {
             "pulse_type": "arb",
-            "qb_freq_ge": 5918.9904,
-            "qb_mixer": 5918.9904,
+            "qb_freq_ge": 2872.649825,
+            "qb_mixer": 2872.649825,
             "qb_gain_ge": 0.1,
             "qb_phase": 0,
             "sigma_ge": 0.05,

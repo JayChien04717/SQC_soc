@@ -1,44 +1,42 @@
 """
 s005a — DRAG Calibration (Alpha Sweep)
 =====================================
-Sweeps the DRAG parameter alpha for a fixed number of X180, X-180 repetitions
-to find the alpha that minimizes phase leakage errors.
-Uses callback-based liveplot (one program per alpha iteration).
+Sweeps the DRAG parameter alpha over a 2D grid of (alpha, iter) using the
+two-for-loop liveplotfun (scan_x_axis + scan_y_axis).
+For each iteration row, finds the alpha that maximises the signal amplitude.
 """
+
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.optimize import curve_fit
 
 from .base_program import BaseProgram
+from .base_experiment import BaseExperiment
 from ..tools.system_cfg import DATA_PATH
 from ..tools.system_tool import hdf5_generator, get_next_filename_labber, config_to_yaml
 from ..plotter.liveplot import liveplotfun
 
 
-# ── Program ──
+# ── Program ──────────────────────────────────────────────────────────────────
+
 
 class DragProgram(BaseProgram):
     def _initialize(self, cfg):
         self.setup_resonator(cfg)
         self.declare_gen_auto(cfg["qb_ch"], cfg["nqz_qb"], "qb_mixer", cfg)
 
-        # Retrieve drag alpha and anharmonicity
         alpha = cfg.get("drag_alpha", 0.5)
-        # delta represents the anharmonicity: the difference between f_ge and f_ef
-        delta = cfg['qb_freq_ge'] - cfg['qb_freq_ef']
+        delta = cfg["qb_freq_ge"] - cfg["qb_freq_ef"]
 
-        # We define a custom DRAG envelope using the add_DRAG method provided by qick
         self.add_DRAG(
             ch=cfg["qb_ch"],
             name="drag_env",
             sigma=cfg["sigma_ge"],
             length=cfg.get("length_mult", 5) * cfg["sigma_ge"],
-            delta=delta, 
+            delta=delta,
             alpha=alpha,
-            even_length=True
+            even_length=True,
         )
-
-        # Add x180 and mx180 pulses using the DRAG envelope
         self.add_pulse(
             ch=cfg["qb_ch"],
             name="x180",
@@ -46,7 +44,7 @@ class DragProgram(BaseProgram):
             envelope="drag_env",
             freq=cfg["qb_freq_ge"],
             phase=0,
-            gain=cfg["pi_gain_ge"]
+            gain=cfg["pi_gain_ge"],
         )
         self.add_pulse(
             ch=cfg["qb_ch"],
@@ -54,22 +52,19 @@ class DragProgram(BaseProgram):
             style="arb",
             envelope="drag_env",
             freq=cfg["qb_freq_ge"],
-            phase=180,  # Negative X pulse
-            gain=cfg["pi_gain_ge"]
+            phase=180,
+            gain=cfg["pi_gain_ge"],
         )
 
     def _body(self, cfg):
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
-        
         if cfg.get("cooling", False):
             self.apply_cool(cfg)
             self.cooling_body(cfg)
 
-        # DRAG error amplification sequence: [X180, X-180] * N
-        # The number of repetitions 'iter' dictates how much the error is amplified
         iterations = int(cfg.get("iter", 10))
         for _ in range(iterations):
-            self.pulse(ch=cfg["qb_ch"], name="x180", t=0)  
+            self.pulse(ch=cfg["qb_ch"], name="x180", t=0)
             self.delay_auto(0.01)
             self.pulse(ch=cfg["qb_ch"], name="mx180", t=0)
             self.delay_auto(0.01)
@@ -77,175 +72,259 @@ class DragProgram(BaseProgram):
         self.measure(cfg)
 
 
-# ── Experiment ──
+# ── Experiment ────────────────────────────────────────────────────────────────
 
-class DragCalibration:
-    """DRAG Parameter Calibration: callback-based liveplot over alpha."""
 
-    def __init__(self, soc, soccfg, config):
-        self.soc = soc
-        self.soccfg = soccfg
-        self.cfg = config
-        self.iqdata = None
-        self.alphas = None
+class DragCalibration(BaseExperiment):
+    """DRAG Calibration: 2D sweep over (alpha × iteration) using liveplotfun 2-for-loop scan."""
 
-    def run(self, py_avg, simulate=False):
-        """Run with liveplot over alpha (and optionally iter as a 2D sweep)."""
-        if "alpha_start" not in self.cfg or "alpha_stop" not in self.cfg or "alpha_steps" not in self.cfg:
-            raise ValueError("Config must contain 'alpha_start', 'alpha_stop', and 'alpha_steps'.")
+    EXPT_NAME = "s005a_drag_ge"
+    TAG = "DRAGCalibration"
+    X_LABEL = "DRAG Parameter (α)"
+    Y_LABEL = "Iterations (N)"
+    TITLE_PREFIX = "DRAG Calibration"
+    SWEEP_KEYS_TO_REMOVE = []
 
-        # Create the array of alphas to sweep
-        self.alphas = np.linspace(
-            self.cfg["alpha_start"], self.cfg["alpha_stop"], self.cfg["alpha_steps"]
-        )
+    X_SAVE_NAME = "Alpha"
+    X_SAVE_UNIT = "a.u."
+    X_SAVE_SCALE = 1.0
 
-        # Create the array of iterations if iter_start and iter_stop are provided
-        if "iter_start" in self.cfg and "iter_stop" in self.cfg:
-            self.iters = np.arange(
-                self.cfg["iter_start"], self.cfg["iter_stop"] + 1, self.cfg.get("iter_step", 1)
+    Y_SAVE_NAME = "Iterations"
+    Y_SAVE_UNIT = "N"
+    Y_SAVE_SCALE = 1.0
+
+    # ── helpers ──────────────────────────────────────────────────────────────
+
+    def _build_scan_axes(self):
+        cfg = self.cfg
+        if (
+            "alpha_start" not in cfg
+            or "alpha_stop" not in cfg
+            or "alpha_steps" not in cfg
+        ):
+            raise ValueError(
+                "cfg must contain 'alpha_start', 'alpha_stop', 'alpha_steps'."
+            )
+
+        alphas = np.linspace(cfg["alpha_start"], cfg["alpha_stop"], cfg["alpha_steps"])
+
+        if "iter_start" in cfg and "iter_stop" in cfg:
+            iters = np.arange(
+                cfg["iter_start"],
+                cfg["iter_stop"] + 1,
+                cfg.get("iter_step", 1),
+                dtype=float,
             )
         else:
-            # Fallback to 1D sweep using the fixed 'iter' value
-            self.iters = None
+            iters = np.array([float(cfg.get("iter", 10))])
+
+        return alphas, iters
+
+    # ── override run() ───────────────────────────────────────────────────────
+
+    def run(self, py_avg, simulate=False, show_final_plot=False, **kwargs):
+        """
+        2-D parameter scan: outer loop = iter (N), inner loop = alpha.
+        Delegates to liveplotfun's _liveplot_2d_scan via scan_x_axis + scan_y_axis.
+        """
+        alphas, iters = self._build_scan_axes()
+        self._sweep_vals_x = alphas
+        self._sweep_vals_y = iters
 
         if simulate:
-            if self.iters is not None:
-                a_ideal = 0.5
-                self.iqdata = np.zeros((len(self.iters), len(self.alphas)), dtype=complex)
-                for i, it in enumerate(self.iters):
-                    z_mock = it * 10 * (self.alphas - a_ideal)**2 + 100 + np.random.normal(0, 2, len(self.alphas))
-                    self.iqdata[i, :] = z_mock + 1j * np.random.normal(0, 1, len(self.alphas))
-                
-                fig, ax = plt.subplots(figsize=(8, 5))
-                im = ax.pcolormesh(self.alphas, self.iters, np.abs(self.iqdata), shading='auto', cmap='viridis')
-                fig.colorbar(im, label="ADC Units (Abs)")
-                ax.set_ylabel("Repetitions (N)")
-            else:
-                a_ideal = 0.5
-                z_mock = 50 * (self.alphas - a_ideal)**2 + 100 + np.random.normal(0, 2, len(self.alphas))
-                self.iqdata = z_mock + 1j * np.random.normal(0, 1, len(self.alphas))
-                
-                fig, ax = plt.subplots(figsize=(8, 5))
-                ax.plot(self.alphas, np.abs(self.iqdata), "o-", markersize=4)
-                ax.set_ylabel("ADC Units (Abs)")
-            
-            ax.set_xlabel("DRAG Parameter ($\\alpha$)")
-            ax.set_title("DRAG Calibration [SIMULATED]")
-            fig.tight_layout()
-            plt.show()
-            return
-
-        if self.iters is not None:
-            def create_prog_2d(a, n):
-                self.cfg["drag_alpha"] = a
-                self.cfg["iter"] = int(n)
-                return DragProgram(
-                    self.soccfg, reps=self.cfg["reps"],
-                    final_delay=self.cfg["relax_delay"], cfg=self.cfg,
+            a_ideal = (alphas[0] + alphas[-1]) / 2
+            self.iqdata = np.zeros((len(iters), len(alphas)), dtype=complex)
+            for i, n in enumerate(iters):
+                z = (
+                    n * 8 * (alphas - a_ideal) ** 2
+                    + 80
+                    + np.random.normal(0, 2, len(alphas))
                 )
-
-            self.iqdata, interrupted, done_avg = liveplotfun(
-                soc=self.soc, py_avg=py_avg,
-                scan_x_axis=self.alphas,
-                scan_y_axis=self.iters,
-                get_prog_callback=create_prog_2d,
-                x_label="DRAG Alpha", 
-                y_label="Iterations (N)",
-                title_prefix="DRAG Calibration",
-                show_final_plot=True,
-            )
-        else:
-            def create_prog_1d(a):
-                self.cfg["drag_alpha"] = a
-                return DragProgram(
-                    self.soccfg, reps=self.cfg["reps"],
-                    final_delay=self.cfg["relax_delay"], cfg=self.cfg,
-                )
-
-            self.iqdata, interrupted, done_avg = liveplotfun(
-                soc=self.soc, py_avg=py_avg,
-                scan_x_axis=self.alphas, get_prog_callback=create_prog_1d,
-                x_label="DRAG Alpha", 
-                title_prefix=f"DRAG Calibration (iter={int(self.cfg.get('iter', 10))})",
-                show_final_plot=True,
-            )
-
-    def analyze_and_plot(self):
-        """Fit DRAG data (parabola) and extract optimal alpha."""
-        if self.iqdata is None:
-            print("No data acquired yet. Call run() first.")
-            return None
-
-        x_pts = self.alphas
-        
-        # Determine whether to analyze 1D or the last row of 2D
-        if getattr(self, "iters", None) is not None:
-            z_pts = np.abs(self.iqdata[-1, :])
-            title_str = f"DRAG Calibration (iter={self.iters[-1]})"
-        else:
-            z_pts = np.abs(self.iqdata)
-            title_str = f"DRAG Calibration (iter={int(self.cfg.get('iter', 10))})"
-
-        def parabola(x, a, b, c):
-            return a * (x - b)**2 + c
-
-        try:
-            idx_max = np.argmax(z_pts)
-            idx_min = np.argmin(z_pts)
-            
-            b_guess = x_pts[idx_min]
-            c_guess = z_pts[idx_min]
-            denom = max((x_pts[idx_max] - b_guess)**2, 1e-10)
-            a_guess = (z_pts[idx_max] - c_guess) / denom
-
-            pOpt, pCov = curve_fit(parabola, x_pts, z_pts, p0=[a_guess, b_guess, c_guess])
-            a_fit, b_fit, c_fit = pOpt
-            optimal_alpha = b_fit
+                self.iqdata[i, :] = z + 1j * np.random.normal(0, 1, len(alphas))
 
             fig, ax = plt.subplots(figsize=(8, 5))
-            ax.plot(x_pts, z_pts, "o", color="blue", label="Raw Data (Max Iter)", markersize=6, alpha=0.7)
-            
-            x_fine = np.linspace(min(x_pts), max(x_pts), 1000)
-            z_fit = parabola(x_fine, *pOpt)
-            
-            ax.plot(x_fine, z_fit, color="orange", linewidth=2, label=f"Fit (Optimum $\\alpha$={optimal_alpha:.4f})")
-            ax.axvline(optimal_alpha, color="red", linestyle="--", alpha=0.8)
-            
-            ax.set_xlabel("DRAG Parameter ($\\alpha$)")
-            ax.set_ylabel("Magnitude (a.u.)")
-            ax.set_title(title_str)
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-            plt.tight_layout()
+            im = ax.pcolormesh(
+                alphas, iters, np.abs(self.iqdata), shading="auto", cmap="viridis"
+            )
+            fig.colorbar(im, ax=ax, label="ADC Units (Abs)")
+            ax.set_xlabel(self.X_LABEL)
+            ax.set_ylabel(self.Y_LABEL)
+            ax.set_title(f"{self.TITLE_PREFIX} [SIMULATED]")
+            fig.tight_layout()
             plt.show()
-            
-            print(f"[DRAG] Optimal alpha found: {optimal_alpha:.4f}")
-            return optimal_alpha
+            return self._post_fit(alphas)
 
-        except Exception as e:
-            print(f"Fitting failed: {e}")
+        # ── hardware: 2-for-loop scan ─────────────────────────────────────────
+        def _make_prog(alpha_val, iter_val):
+            self.cfg["drag_alpha"] = float(alpha_val)
+            self.cfg["iter"] = int(iter_val)
+            return DragProgram(
+                self.soccfg,
+                reps=self.cfg["reps"],
+                final_delay=self.cfg["relax_delay"],
+                cfg=self.cfg,
+            )
+
+        self.iqdata, interrupted, avg_count = liveplotfun(
+            soc=self.soc,
+            py_avg=py_avg,
+            scan_x_axis=alphas,  # inner loop → alpha
+            scan_y_axis=iters,  # outer loop → N
+            get_prog_callback=_make_prog,
+            x_label=self.X_LABEL,
+            y_label=self.Y_LABEL,
+            title_prefix=self.TITLE_PREFIX,
+            show_final_plot=show_final_plot,
+        )
+
+        if self.iqdata is None:
+            print("No data acquired.")
+            return None
+        if interrupted:
+            print(f"Interrupted at avg {avg_count}.")
+
+        return self._post_fit(alphas)
+
+    # ── _create_program / _extract_sweep_axis (required by BaseExperiment) ───
+
+    def _create_program(self):
+        """Not used directly (run() is overridden), but required by ABC."""
+        self.cfg.setdefault("drag_alpha", self.cfg.get("alpha_start", 0.5))
+        self.cfg.setdefault("iter", self.cfg.get("iter_start", 1))
+        return DragProgram(
+            self.soccfg,
+            reps=self.cfg["reps"],
+            final_delay=self.cfg["relax_delay"],
+            cfg=self.cfg,
+        )
+
+    def _extract_sweep_axis(self, prog):
+        """Not used directly (run() is overridden)."""
+        return self._sweep_vals_x
+
+    def _extract_sweep_axis_y(self, prog):
+        """Not used directly (run() is overridden)."""
+        return self._sweep_vals_y
+
+    # ── analysis ─────────────────────────────────────────────────────────────
+
+    def analyze_and_plot(self):
+        """Backward-compatible alias for _post_fit()."""
+        return self._post_fit()
+
+    def _post_fit(self, x_vals=None):
+        """
+        Sum all iteration traces (abs), then find the alpha at the
+        max (or min) of the summed trace — mimics error-amplification logic.
+        Returns: optimal_alpha (float).
+        """
+        if self.iqdata is None:
+            print("No data. Call run() first.")
             return None
 
-    def saveLabber(self, qb_idx, yoko_value=None):
-        if self.iqdata is None:
-            print("No data to save.")
-            return
+        alphas = self._sweep_vals_x
+        iters = self._sweep_vals_y
 
-        expt_name = f"s005a_drag_ge_{qb_idx}"
-        file_path = get_next_filename_labber(DATA_PATH, expt_name, yoko_value)
-        dict_val = config_to_yaml(self.cfg)
-        
-        x_info = {"name": "Alpha", "unit": "a.u.", "values": self.alphas}
-        y_info = None
-        if getattr(self, "iters", None) is not None:
-             y_info = {"name": "Iterations", "unit": "N", "values": self.iters}
+        # ── Sum every iteration row ───────────────────────────────────────────
+        sum_trace = np.sum(np.abs(self.iqdata), axis=0)  # shape: (n_alpha,)
 
-        hdf5_generator(
-            filepath=file_path,
-            x_info=x_info,
-            y_info=y_info,
-            z_info={"name": "Signal", "unit": "ADC unit", "values": self.iqdata},
-            comment=f"\n{dict_val}", 
-            tag="DRAGCalibration",
+        # Peak: index of maximum in the summed trace
+        idx_max = int(np.argmax(sum_trace))
+        idx_min = int(np.argmin(sum_trace))
+        optimal_alpha_max = alphas[idx_max]
+        optimal_alpha_min = alphas[idx_min]
+
+        # Parabola sub-pixel refinement around the max peak
+        try:
+
+            def parabola(x, a, b, c):
+                return a * (x - b) ** 2 + c
+
+            for idx_pk, label in [(idx_max, "max"), (idx_min, "min")]:
+                i0 = max(idx_pk - 3, 0)
+                i1 = min(idx_pk + 4, len(alphas))
+                popt, _ = curve_fit(
+                    parabola,
+                    alphas[i0:i1],
+                    sum_trace[i0:i1],
+                    p0=[1.0, alphas[idx_pk], sum_trace[idx_pk]],
+                )
+                if alphas.min() <= popt[1] <= alphas.max():
+                    if label == "max":
+                        optimal_alpha_max = popt[1]
+                    else:
+                        optimal_alpha_min = popt[1]
+        except Exception:
+            pass
+
+        # ── Pick the larger peak (abs): max vs min ────────────────────────────
+        val_at_max = sum_trace[idx_max]
+        val_at_min = sum_trace[idx_min]
+        if abs(val_at_max) >= abs(val_at_min):
+            optimal_alpha = optimal_alpha_max
+        else:
+            optimal_alpha = optimal_alpha_min
+
+        print(
+            f"\n[DRAG Sum] Optimal α = {optimal_alpha:.6f}  (max={val_at_max:.2f}, min={val_at_min:.2f})"
         )
-        print(f"Data save to {file_path}")
+
+        # ── Plot ─────────────────────────────────────────────────────────────
+        fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+
+        # Left: 2D heatmap
+        ax0 = axes[0]
+        im = ax0.pcolormesh(
+            alphas, iters, np.abs(self.iqdata), shading="auto", cmap="viridis"
+        )
+        fig.colorbar(im, ax=ax0, label="ADC Units (Abs)")
+        ax0.axvline(
+            optimal_alpha,
+            color="red",
+            linestyle="--",
+            linewidth=2,
+            label=f"α={optimal_alpha:.4f}",
+        )
+        ax0.set_xlabel(self.X_LABEL)
+        ax0.set_ylabel(self.Y_LABEL)
+        ax0.set_title("Drag calibration")
+        ax0.legend(fontsize=9)
+
+        # Right: summed trace
+        ax1 = axes[1]
+        ax1.plot(
+            alphas,
+            sum_trace,
+            "o-",
+            color="steelblue",
+            linewidth=2,
+            markersize=5,
+            label="Σ iterations",
+        )
+        ax1.axvline(
+            optimal_alpha,
+            color="red",
+            linestyle="--",
+            linewidth=2,
+            label=f"α={optimal_alpha:.4f}",
+        )
+        ax1.set_xlabel(self.X_LABEL)
+        ax1.set_ylabel("ADC Units")
+        ax1.set_title("Summed Trace")
+        ax1.legend(fontsize=9)
+        ax1.grid(True, alpha=0.3)
+
+        fig.suptitle(self.TITLE_PREFIX, fontsize=13)
+        fig.tight_layout()
+        plt.show()
+
+        self.fit_params = {
+            "optimal_alpha": round(float(optimal_alpha), 6),
+        }
+        return self.fit_params
+
+    def _save_comment(self, dict_val):
+        if self.fit_params:
+            a = self.fit_params.get("optimal_alpha", "N/A")
+            return f"DRAG Calibration\nOptimal alpha = {a}\n{dict_val}"
+        return f"{dict_val}"

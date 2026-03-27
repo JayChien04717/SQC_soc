@@ -15,8 +15,8 @@ class YOKOGS200:
         except visa.Error as ex:
             sys.stderr.write("Couldn't connect to '%s', exiting now..." % VISAaddress)
             sys.exit()
-        self.voltage_ramp_step = 1e-2  # Step size for voltage ramp
-        self.current_ramp_step = 1e-6  # Step size for current ramp
+        self.voltage_ramp_step = 1e-5  # Step size for voltage ramp
+        self.current_ramp_step = 1e-8  # Step size for current ramp
         self.ramp_interval = 0.01  # Dwell time (s) for each ramp step
 
     # ==========================================================================#

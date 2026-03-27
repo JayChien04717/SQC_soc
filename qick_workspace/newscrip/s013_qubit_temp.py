@@ -93,13 +93,13 @@ class QubitTemperatureEf(BaseExperiment):
         self._full_model = full_model
 
         # ── Meas run: ge π-pulse → ef Rabi ───────────────────────────
-        print("[Temp] Meas run: ge π + ef Rabi...")
+        print("[Temp] Ref run: ef Rabi only...")
         self.cfg["temp_ref"] = False
         super().run(py_avg, simulate=simulate)
         self._iq_meas = self.iqdata.copy()
 
         # ── Ref run: ef Rabi only ─────────────────────────────────────
-        print("[Temp] Ref run: ef Rabi only...")
+        print("[Temp] Meas run: ge π + ef Rabi...")
         self.cfg["temp_ref"] = True
         super().run(py_avg, simulate=simulate)
         self._iq_ref = self.iqdata.copy()
@@ -149,41 +149,44 @@ class QubitTemperatureEf(BaseExperiment):
         return T_K
 
     def _solve_temperature(self, A_meas, A_ref, fge_Hz, fef_Hz):
-        ratio = A_meas / A_ref
+        # Use Ref/Meas as the standard ratio (always < 1 for T > 0)
+        measured_ratio = A_meas / A_ref
 
         if not self._full_model:
-            # ── Closed-form (P_f ≈ 0) ────────────────────────────────
-            # P_e / P_g = exp(-hf/kT)  =>  T = -hf / (kB * ln(ratio))
-            if ratio >= 1.0:
-                print(f"[Temp] WARNING: ratio={ratio:.4f} ≥ 1 is unphysical")
+            # --- Simple Model (P_f ≈ 0) ---
+            # ratio = P_e / P_g = exp(-hf_ge / kT)
+            # T = -hf_ge / (kB * ln(ratio))
+            if measured_ratio <= 0 or measured_ratio >= 1:
+                print(f"[Temp] Unphysical ratio: {measured_ratio:.4f}")
                 return None
-            return -(_H * fge_Hz) / (_KB * np.log(ratio))
+
+            return -(_H * fge_Hz) / (_KB * np.log(measured_ratio))
 
         else:
-            # ── Full three-level solver ───────────────────────────────
+            # --- Full Three-Level Solver ---
             E_ge = _H * fge_Hz
-            E_gef = _H * (fge_Hz + fef_Hz)
+            E_gf = _H * (fge_Hz + fef_Hz)  # Energy of state f relative to g
 
             def residual(T):
-                e1 = np.exp(-E_ge / (_KB * T))
-                e2 = np.exp(-E_gef / (_KB * T))
-                Z = 1 + e1 + e2
-                P_g, P_e, P_f = 1 / Z, e1 / Z, e2 / Z
-                # A_ref ∝ P_e - P_f
-                # A_meas ∝ P_g - P_f (因為做了 pi_ge 脈衝，g, e 互換)
-                denom = P_g - P_f
-                if abs(denom) < 1e-14:
-                    return np.inf
-                return (P_e - P_f) / denom - ratio
+                # Partition function Z = 1 + exp(-E_e/kT) + exp(-E_f/kT)
+                beta = 1.0 / (_KB * T)
+                e_e = np.exp(-E_ge * beta)
+                e_f = np.exp(-E_gf * beta)
+                Z = 1 + e_e + e_f
+
+                p_g, p_e, p_f = 1 / Z, e_e / Z, e_f / Z
+
+                # Theoretical ratio: (P_e - P_f) / (P_g - P_f)
+                # This accounts for population already in 'f' reducing the Rabi contrast
+                theory_ratio = (p_e - p_f) / (p_g - p_f)
+                return theory_ratio - measured_ratio
 
             try:
-                # 這裡的 bracket 可以根據稀釋製冷機的範圍調整 [10mK, 1K]
-                sol = root_scalar(
-                    residual, bracket=[0.005, 1.0], method="brentq", xtol=1e-7
-                )
+                # bracket [5mK, 1K] is usually safe for dilution refrigerators
+                sol = root_scalar(residual, bracket=[0.005, 1.0], method="brentq")
                 return sol.root if sol.converged else None
             except ValueError as e:
-                print(f"[Temp] root_scalar failed: {e}")
+                print(f"[Temp] Solver failed (likely ratio too high/low): {e}")
                 return None
 
     # ── 覆寫 _post_fit，回傳溫度而非 π gain ──────────────────────────
