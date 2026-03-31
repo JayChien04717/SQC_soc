@@ -257,17 +257,16 @@ class DragCalibration(BaseExperiment):
         except Exception:
             pass
 
-        # ── Pick the larger peak (abs): max vs min ────────────────────────────
-        val_at_max = sum_trace[idx_max]
-        val_at_min = sum_trace[idx_min]
-        if abs(val_at_max) >= abs(val_at_min):
+        # ── Pick the larger peak relative to baseline ────────────────────────────
+        baseline = np.median(sum_trace)
+        dev_max = abs(sum_trace[idx_max] - baseline)
+        dev_min = abs(sum_trace[idx_min] - baseline)
+
+        if dev_max >= dev_min:
             optimal_alpha = optimal_alpha_max
         else:
             optimal_alpha = optimal_alpha_min
-
-        print(
-            f"\n[DRAG Sum] Optimal α = {optimal_alpha:.6f}  (max={val_at_max:.2f}, min={val_at_min:.2f})"
-        )
+        print(f"\n[DRAG Sum] Optimal α = {optimal_alpha:.6f})")
 
         # ── Plot ─────────────────────────────────────────────────────────────
         fig, axes = plt.subplots(1, 2, figsize=(13, 5))

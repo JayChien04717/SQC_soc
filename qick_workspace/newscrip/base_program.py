@@ -235,25 +235,34 @@ class BaseProgram(AveragerProgramV2):
                 length=cfg[f"qb_flat_top_length_{prefix}"],
             )
         elif pulse_type == "drag":
-            try:
-                if (
-                    cfg.get("delta", cfg.get("qb_freq_ge") - cfg.get("qb_freq_ef"))
-                    is None
-                ):
-                    raise ValueError(
-                        "Delta/anharmonicity must be specified for DRAG pulse."
-                    )
-            except KeyError as e:
-                raise ValueError(f"Missing required anharmonicity key: {e}")
-            alpha = cfg.get("drag_alpha", 0.5)
-            self.add_DRAG(
+            # Add DRAG envelope (deduplicated per channel+prefix)
+            env_name = f"env_{prefix}_drag"
+            if not hasattr(self, "_added_envs"):
+                self._added_envs = set()
+            env_key = (ch, env_name)
+            if env_key not in self._added_envs:
+                delta = cfg["qb_freq_ge"] - cfg["qb_freq_ef"]  # detuning for DRAG
+                alpha = cfg.get("drag_alpha", 0.5)
+                self.add_DRAG(
+                    ch=ch,
+                    name=env_name,
+                    sigma=cfg[f"sigma_{prefix}"],
+                    length=cfg[f"sigma_{prefix}"] * length_mult,
+                    delta=delta,
+                    alpha=alpha,
+                    even_length=True,
+                )
+                self._added_envs.add(env_key)
+
+            # Add pulse using the DRAG envelope
+            self.add_pulse(
                 ch=ch,
                 name=name,
-                sigma=cfg[f"sigma_{prefix}"],
-                length=cfg[f"sigma_{prefix}"] * length_mult,
-                delta=delta,
-                alpha=alpha,
-                even_length=True,
+                style="arb",
+                envelope=env_name,
+                freq=freq,
+                phase=phase,
+                gain=gain,
             )
 
     def setup_standard_gates(self, cfg, prefix="ge", pulse_type=None, shape="gauss"):
