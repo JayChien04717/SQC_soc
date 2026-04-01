@@ -5,7 +5,6 @@ Amplitude Rabi: sweeps qubit drive gain at fixed length.
 """
 from .base_program import BaseProgram
 from .base_experiment import BaseExperiment
-from .mock_signals import mock_decaysin
 from ..tools.fitting import decaysin, fitdecaysin, fix_phase
 from ..plotter.plot_utils import plot_final
 
@@ -45,9 +44,6 @@ class PowerRabi(BaseExperiment):
 
     def _extract_sweep_axis(self, prog):
         return prog.get_pulse_param("qb_pulse", "gain", as_array=True)
-
-    def _simulate(self, x_pts):
-        return mock_decaysin(x_pts, amp=0.5, freq=2.0, decay=3.0, offset=0.5)
 
     def _post_fit(self, x_vals):
         self.fit_params, error, fig, ax = plot_final(

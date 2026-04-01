@@ -9,7 +9,6 @@ import matplotlib.pyplot as plt
 from scipy.optimize import root_scalar
 from .base_program import BaseProgram
 from .base_experiment import BaseExperiment
-from .mock_signals import mock_decaysin
 from ..tools.fitting import decaysin, fitdecaysin, fix_phase
 
 
@@ -76,14 +75,13 @@ class QubitTemperatureEf(BaseExperiment):
         return self.gains
 
     # ── 兩次 run，覆寫父類 run() ──────────────────────────────────────
-    def run(self, py_avg, simulate=False, full_model=False):
+    def run(self, py_avg, full_model=False):
         """
         Execute meas run + ref run, then compute temperature.
 
         Parameters
         ----------
         py_avg     : int   — software averages per run
-        simulate   : bool  — use mock data instead of hardware
         full_model : bool  — use full 3-level solver (default: P_f≈0 approx)
 
         Returns
@@ -95,13 +93,13 @@ class QubitTemperatureEf(BaseExperiment):
         # ── Meas run: ge π-pulse → ef Rabi ───────────────────────────
         print("[Temp] Ref run: ef Rabi only...")
         self.cfg["temp_ref"] = False
-        super().run(py_avg, simulate=simulate)
+        super().run(py_avg)
         self._iq_meas = self.iqdata.copy()
 
         # ── Ref run: ef Rabi only ─────────────────────────────────────
         print("[Temp] Meas run: ge π + ef Rabi...")
         self.cfg["temp_ref"] = True
-        super().run(py_avg, simulate=simulate)
+        super().run(py_avg)
         self._iq_ref = self.iqdata.copy()
 
         return self._compute_temperature()
@@ -256,16 +254,6 @@ class QubitTemperatureEf(BaseExperiment):
         plt.show()
 
         self._last_T_K = T_K
-
-    # ── Simulation (覆寫，兩次 run 各自模擬對應的 amplitude) ─────────
-    def _simulate(self, x_pts):
-        """
-        Mock data: ref amplitude ≈ ratio × meas amplitude.
-        At 50 mK, ratio = exp(-h*5GHz / kB*50mK) ≈ 0.08.
-        """
-        is_ref = self.cfg.get("temp_ref", False)
-        amp = 0.08 * 0.50 if is_ref else 0.50  # ref much smaller
-        return mock_decaysin(x_pts, amp=amp, freq=2.0, decay=3.0, offset=0.5)
 
     def _save_comment(self, dict_val):
         """

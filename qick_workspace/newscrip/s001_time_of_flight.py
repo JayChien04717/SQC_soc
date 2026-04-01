@@ -22,9 +22,19 @@ from .base_experiment import BaseExperiment
 class LoopbackProgram(BaseProgram):
     def _initialize(self, cfg):
         self.setup_resonator(cfg, prefix="ge")
+        self.setup_qb_pulse(cfg, "ge", name="qb_pulse", gain_key="pi_gain_ge")
+        self.setup_qb_pulse(cfg, "ef", name="qb_pulse_ef", gain_key="pi_gain_ef")
 
     def _body(self, cfg):
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
+        if cfg.get("cheek_e", False):
+            self.pulse(ch=cfg["qb_ch"], name="qb_pulse", t=0)
+            self.delay_auto(0.05, tag="cheek_delay")
+        if cfg.get("check_f", False):
+            self.pulse(ch=cfg["qb_ch"], name="qb_pulse", t=0)
+            self.delay_auto(0.05)
+            self.pulse(ch=cfg["qb_ch"], name="qb_pulse_ef", t=0)
+            self.delay_auto(0.05, tag="cheek_delay_ef")
         self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
         self.trigger(ros=[cfg["ro_ch"]], pins=[0], t=0)
 
@@ -63,35 +73,9 @@ class TOF(BaseExperiment):
 
     # ── Override run: acquire_decimated with custom liveplot ──
 
-    def run(self, py_avg=1, simulate=False):
+    def run(self, py_avg=1):
         """Override: uses acquire_decimated instead of standard sweep."""
-        if simulate:
-            return self._run_simulate(py_avg)
         return self.liveplot(py_avg=py_avg)
-
-    def _run_simulate(self, py_avg=1):
-        """Generate mock TOF data without hardware."""
-        from .mock_signals import mock_tof
-
-        n_pts = self.cfg.get("readout_length", 200)
-        self.t = np.linspace(0, 2.0, n_pts)
-        self._sweep_vals_x = self.t
-        self.iqdata = mock_tof(
-            self.t, pulse_start=0.3, pulse_end=0.7, amp=1.0, noise=0.02
-        )
-
-        fig, ax = plt.subplots(figsize=(7, 5))
-        ax.plot(self.t, np.abs(self.iqdata), "o-", markersize=2, label="Simulated Data")
-        mean = np.mean(np.abs(self.iqdata))
-        cross_idx = np.argmax(np.abs(self.iqdata) > 1.5 * mean)
-        trig_time = self.t[cross_idx]
-        ax.axvline(trig_time, c="r", ls="--", label=f"TOF: {trig_time:.2f} μs")
-        ax.set_title(f"{self.TITLE_PREFIX} [SIMULATED], trig = {trig_time:.2f} μs")
-        ax.set_xlabel(self.X_LABEL)
-        ax.set_ylabel("ADC unit")
-        ax.legend()
-        plt.show()
-        return self.iqdata, True, py_avg
 
     def liveplot(self, py_avg=1, threshold=1.5):
         prog = self._create_program()

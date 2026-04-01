@@ -91,12 +91,9 @@ class SingleShot_gef:
         self.soccfg = soccfg
         self.cfg = config
 
-    def run(self, SHOTS, shot_f=False, simulate=False):
+    def run(self, SHOTS, shot_f=False):
         self.cfg["shots"] = SHOTS
         self.cfg["shot_f"] = shot_f
-
-        if simulate:
-            return self._simulate(SHOTS, shot_f)
 
         prog = SingleShotProgram_gef(
             self.soccfg, reps=1, final_delay=self.cfg["relax_delay"], cfg=self.cfg
@@ -114,17 +111,6 @@ class SingleShot_gef:
             self.data = {"Ig": Ig, "Qg": Qg, "Ie": Ie, "Qe": Qe, "If": If, "Qf": Qf}
         else:
             self.data = {"Ig": Ig, "Qg": Qg, "Ie": Ie, "Qe": Qe}
-        return self.data
-
-    def _simulate(self, n_shots, shot_f=False):
-        """Generate mock single-shot Gaussian IQ blobs."""
-        from .mock_signals import mock_singleshot
-        result = mock_singleshot(n_shots, separation=3.0, sigma=1.0, include_f=shot_f)
-        self.data = {"Ig": result["ig"], "Qg": result["qg"],
-                     "Ie": result["ie"], "Qe": result["qe"]}
-        if shot_f:
-            self.data["If"] = result["if"]
-            self.data["Qf"] = result["qf"]
         return self.data
 
     def plot(self, fid_avg=False, fit=False, normalize=False, verbose=True, overlap=False):

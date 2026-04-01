@@ -139,29 +139,11 @@ class Tomography:
         print(f"Purity: {purity:.5f}")
         return expect_values, rho_mle
 
-    def run(self, py_avg, prep_pulse_name=None, simulate=False):
+    def run(self, py_avg, prep_pulse_name=None):
         self.prep_pulse_name = str(prep_pulse_name)
-        if simulate:
-            self._simulate(prep_pulse_name)
-        else:
-            self.iq_g, self.iq_e = self._run_calibration(py_avg)
-            self.tomo_data_raw = self._run_tomography(py_avg, prep_pulse_name)
+        self.iq_g, self.iq_e = self._run_calibration(py_avg)
+        self.tomo_data_raw = self._run_tomography(py_avg, prep_pulse_name)
         self.expect_values, self.rho_mle = self._reconstruct_density_matrix()
-
-    def _simulate(self, prep_pulse_name=None):
-        """Generate mock calibration + tomography data without hardware."""
-        from .mock_signals import mock_tomography
-        # Mock calibration: ground=0, excited=1+0j
-        self.iq_g = 0.05 + 0.05j
-        self.iq_e = 1.0 + 0.1j
-        # Mock tomography on 3 axes
-        tomo = mock_tomography(prep_pulse=str(prep_pulse_name), noise=0.02)
-        self.tomo_data_raw = {
-            "X": tomo[0],  # X measurement
-            "Y": tomo[2],  # Y measurement
-            "Z": tomo[4],  # Z measurement
-        }
-        print(f"[SIMULATED] State tomography for prep_pulse='{prep_pulse_name}'")
 
     def plot(self, plot_type="2d", qb_idx=None):
         if self.rho_mle is None:

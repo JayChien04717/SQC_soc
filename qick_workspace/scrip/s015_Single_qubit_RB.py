@@ -372,8 +372,8 @@ class RBProgram(AveragerProgramV2):
         self.add_gauss(
             ch=qb_ch,
             name="ramp",
-            sigma=cfg["sigma"],
-            length=cfg["sigma"] * 5,
+            sigma=cfg["sigma_ge"],
+            length=cfg["sigma_ge"] * 5,
             even_length=True,
         )
 
@@ -484,7 +484,7 @@ class RBProgram(AveragerProgramV2):
         # --- RB Gate Sequence ---
         for i in self.cfg["gate_seq"]:
             if i == "I" or i == "-I":
-                self.delay_auto(cfg["sigma"] * 5)
+                self.delay_auto(cfg["sigma_ge"] * 5)
             else:
                 self.pulse(ch=self.cfg["qb_ch"], name=f"{i}", t=0)
                 self.delay_auto(0.01)  # Small delay between pulses

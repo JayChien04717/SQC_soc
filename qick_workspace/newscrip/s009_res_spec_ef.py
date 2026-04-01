@@ -5,7 +5,6 @@ ge pi pulse first, then sweeps resonator frequency.
 """
 from .base_program import BaseProgram
 from .base_experiment import BaseExperiment
-from .mock_signals import mock_lorentzian
 from ..tools.module_fitzcu import resonator_circlefit
 
 
@@ -45,16 +44,10 @@ class ResonatorSpec_ef(BaseExperiment):
     def _extract_sweep_axis(self, prog):
         return prog.get_pulse_param("res_pulse", "freq", as_array=True)
 
-    def run(self, py_avg, solve_type="hm", simulate=False, **kwargs):
+    def run(self, py_avg, solve_type="hm", **kwargs):
         """Override to pass solve_type to circle fit."""
         self._solve_type = solve_type
-        return super().run(py_avg, simulate=simulate, **kwargs)
-
-    def _simulate(self, x_pts):
-        f0 = self.cfg.get("res_freq_ge", (x_pts[0] + x_pts[-1]) / 2)
-        if hasattr(f0, "start"):
-            f0 = (f0.start + f0.stop) / 2
-        return mock_lorentzian(x_pts, f0=f0, gamma=2, amp=1.0, offset=0.5)
+        return super().run(py_avg, **kwargs)
 
     def _post_fit(self, x_vals):
         self.param = resonator_circlefit(x_vals, self.iqdata, solve_type=self._solve_type)

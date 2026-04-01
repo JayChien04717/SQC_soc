@@ -6,7 +6,6 @@ Ramsey on ef: ge pi pulse, then ef pi/2 — wait — pi/2.
 
 from .base_program import BaseProgram
 from .base_experiment import BaseExperiment
-from .mock_signals import mock_decaysin, mock_exp_decay
 from ..tools.fitting import decaysin, fitdecaysin, expfunc, fitexp
 from ..plotter.plot_utils import plot_final
 
@@ -67,15 +66,6 @@ class Ramsey_ef(BaseExperiment):
     def _extract_sweep_axis(self, prog):
         self.delay_times = prog.get_time_param("wait", "t", as_array=True)
         return self.delay_times
-
-    def _simulate(self, x_pts):
-        ramsey_freq = self.cfg.get("ramsey_freq", 0.5)
-        if ramsey_freq != 0:
-            return mock_decaysin(
-                x_pts, amp=0.5, freq=ramsey_freq, decay=10.0, offset=0.5
-            )
-        else:
-            return mock_exp_decay(x_pts, amp=0.5, tau=10.0, offset=0.0)
 
     def _post_fit(self, x_vals):
         if self.cfg["ramsey_freq"] != 0:

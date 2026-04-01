@@ -6,7 +6,6 @@ Hahn echo: pi/2 — wait/2 — pi — wait/2 — pi/2 — readout.
 
 from .base_program import BaseProgram
 from .base_experiment import BaseExperiment
-from .mock_signals import mock_decaysin, mock_exp_decay
 from ..tools.fitting import decaysin, fitdecaysin, expfunc, fitexp
 from ..plotter.plot_utils import plot_final
 
@@ -63,15 +62,6 @@ class SpinEcho(BaseExperiment):
             "wait1", "t", as_array=True
         ) + prog.get_time_param("wait2", "t", as_array=True)
         return self.delay_times
-
-    def _simulate(self, x_pts):
-        ramsey_freq = self.cfg.get("ramsey_freq", 0.5)
-        if ramsey_freq != 0:
-            return mock_decaysin(
-                x_pts, amp=0.5, freq=ramsey_freq, decay=30.0, offset=0.5
-            )
-        else:
-            return mock_exp_decay(x_pts, amp=0.5, tau=30.0, offset=0.0)
 
     def _post_fit(self, x_vals):
         if self.cfg["ramsey_freq"] != 0:

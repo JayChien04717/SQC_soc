@@ -1154,47 +1154,134 @@ def rb_gate_fidelity(p_rb: float, p_irb: float, d: int) -> float:
     return 1 - (d - 1) * (1 - p_irb / p_rb) / d
 
 
+# def fitrb(
+#     xdata: np.ndarray, ydata: np.ndarray, fitparams: Optional[List[float]] = None
+# ) -> Tuple[List[float], np.ndarray]:
+#     """
+#     Fit data to a randomized benchmarking function.
+
+#     Args:
+#         xdata: X-axis data points (sequence depth)
+#         ydata: Y-axis data points (fidelity)
+#         fitparams: Optional initial parameters [p, a, b]
+
+#     Returns:
+#         Tuple of (optimized_parameters, covariance_matrix)
+#     """
+#     if fitparams is None:
+#         fitparams = [None] * 3
+
+#     # Initialize parameters if not provided
+#     if fitparams[0] is None:
+#         fitparams[0] = 0.9  # p
+#     if fitparams[1] is None:
+#         fitparams[1] = np.max(ydata) - np.min(ydata)  # a
+#     if fitparams[2] is None:
+#         fitparams[2] = np.min(ydata)  # b
+
+#     bounds = ([0, 0, 0], [1, 10 * np.max(ydata) - np.min(ydata), np.max(ydata)])
+
+#     fitparams = validate_bounds(fitparams, bounds)
+#     pOpt = fitparams
+#     pCov = np.full(shape=(len(fitparams), len(fitparams)), fill_value=np.inf)
+
+#     try:
+#         pOpt, pCov = sp.optimize.curve_fit(
+#             rb_func, xdata, ydata, p0=fitparams, bounds=bounds
+#         )
+#         print(pOpt)
+#         print(pCov[0][0], pCov[1][1], pCov[2][2])
+#     except RuntimeError:
+#         print("Warning: Fit randomized benchmarking failed!")
+#         traceback.print_exc()
+#         pOpt = [np.nan] * len(pOpt)
+
+#     return pOpt, pCov
+
+
 def fitrb(
-    xdata: np.ndarray, ydata: np.ndarray, fitparams: Optional[List[float]] = None
+    xdata: np.ndarray,
+    ydata: np.ndarray,
+    fitparams: Optional[List[float]] = None,
+    p_bounds: Tuple[float, float] = (0.0, 1.0),
+    maxfev: int = 10000,
 ) -> Tuple[List[float], np.ndarray]:
     """
-    Fit data to a randomized benchmarking function.
+    Fit data to a * p**depth + b.
 
-    Args:
-        xdata: X-axis data points (sequence depth)
-        ydata: Y-axis data points (fidelity)
-        fitparams: Optional initial parameters [p, a, b]
-
-    Returns:
-        Tuple of (optimized_parameters, covariance_matrix)
+    p_bounds : (p_min, p_max) — tighten this to constrain the depolarizing
+               parameter, e.g. (0.95, 1.0) for a high-fidelity qubit.
     """
+    y = np.asarray(ydata, dtype=float)
+    x = np.asarray(xdata, dtype=float)
+
+    # ── smart initial guess ──────────────────────────────────────────────────
+    y_max, y_min = y.max(), y.min()
+    a0 = y_max - y_min  # could be negative if signal is inverted
+    b0 = y_min  # floor at large depth
+
+    # Estimate p from the data: if the curve decays, fit log-linear on the
+    # (y - b0) values that are positive; fall back to 0.99 if that fails.
+    try:
+        delta = y - b0
+        mask = delta > 0
+        if mask.sum() >= 2:
+            slope, _ = np.polyfit(x[mask], np.log(delta[mask] + 1e-12), 1)
+            p0 = float(np.clip(np.exp(slope), *p_bounds))
+        else:
+            p0 = float(np.clip(0.99, *p_bounds))
+    except Exception:
+        p0 = float(np.clip(0.99, *p_bounds))
+
     if fitparams is None:
-        fitparams = [None] * 3
+        fitparams = [p0, a0, b0]
+    else:
+        fitparams = list(fitparams)
+        if fitparams[0] is None:
+            fitparams[0] = p0
+        if fitparams[1] is None:
+            fitparams[1] = a0
+        if fitparams[2] is None:
+            fitparams[2] = b0
 
-    # Initialize parameters if not provided
-    if fitparams[0] is None:
-        fitparams[0] = 0.9  # p
-    if fitparams[1] is None:
-        fitparams[1] = np.max(ydata) - np.min(ydata)  # a
-    if fitparams[2] is None:
-        fitparams[2] = np.min(ydata)  # b
+    # ── bounds ───────────────────────────────────────────────────────────────
+    # a and b are now unconstrained in sign (handles inverted IQ signals).
+    # p is bounded by p_bounds.
+    a_mag = max(abs(a0) * 10, 1.0)
+    b_mag = max(abs(b0) * 10 + abs(a0) * 10, 1.0)
 
-    bounds = ([0, 0, 0], [1, 10 * np.max(ydata) - np.min(ydata), np.max(ydata)])
+    bounds = (
+        [p_bounds[0], -a_mag, -b_mag],
+        [p_bounds[1], a_mag, b_mag],
+    )
 
-    fitparams = validate_bounds(fitparams, bounds)
+    # Clip initial guess inside bounds
+    for i, (lo, hi) in enumerate(zip(bounds[0], bounds[1])):
+        fitparams[i] = float(np.clip(fitparams[i], lo + 1e-9, hi - 1e-9))
+
     pOpt = fitparams
-    pCov = np.full(shape=(len(fitparams), len(fitparams)), fill_value=np.inf)
+    pCov = np.full((3, 3), np.inf)
 
     try:
         pOpt, pCov = sp.optimize.curve_fit(
-            rb_func, xdata, ydata, p0=fitparams, bounds=bounds
+            rb_func,
+            x,
+            y,
+            p0=fitparams,
+            bounds=bounds,
+            maxfev=maxfev,
+            method="trf",  # Trust Region Reflective — better near bounds
         )
-        print(pOpt)
-        print(pCov[0][0], pCov[1][1], pCov[2][2])
+        print(f"[fitrb] p={pOpt[0]:.6f}  a={pOpt[1]:.4f}  b={pOpt[2]:.4f}")
+        print(
+            f"[fitrb] σ(p)={np.sqrt(pCov[0, 0]):.2e}  "
+            f"σ(a)={np.sqrt(pCov[1, 1]):.2e}  "
+            f"σ(b)={np.sqrt(pCov[2, 2]):.2e}"
+        )
     except RuntimeError:
-        print("Warning: Fit randomized benchmarking failed!")
+        print("Warning: RB fit failed!")
         traceback.print_exc()
-        pOpt = [np.nan] * len(pOpt)
+        pOpt = [np.nan] * 3
 
     return pOpt, pCov
 

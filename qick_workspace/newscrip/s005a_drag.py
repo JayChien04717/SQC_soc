@@ -110,7 +110,7 @@ class DragCalibration(BaseExperiment):
 
     # ── override run() ───────────────────────────────────────────────────────
 
-    def run(self, py_avg, simulate=False, show_final_plot=False, **kwargs):
+    def run(self, py_avg, show_final_plot=False, **kwargs):
         """
         2-D parameter scan: outer loop = iter (N), inner loop = alpha.
         Delegates to liveplotfun's _liveplot_2d_scan via scan_x_axis + scan_y_axis.
@@ -118,29 +118,6 @@ class DragCalibration(BaseExperiment):
         alphas, iters = self._build_scan_axes()
         self._sweep_vals_x = alphas
         self._sweep_vals_y = iters
-
-        if simulate:
-            a_ideal = (alphas[0] + alphas[-1]) / 2
-            self.iqdata = np.zeros((len(iters), len(alphas)), dtype=complex)
-            for i, n in enumerate(iters):
-                z = (
-                    n * 8 * (alphas - a_ideal) ** 2
-                    + 80
-                    + np.random.normal(0, 2, len(alphas))
-                )
-                self.iqdata[i, :] = z + 1j * np.random.normal(0, 1, len(alphas))
-
-            fig, ax = plt.subplots(figsize=(8, 5))
-            im = ax.pcolormesh(
-                alphas, iters, np.abs(self.iqdata), shading="auto", cmap="viridis"
-            )
-            fig.colorbar(im, ax=ax, label="ADC Units (Abs)")
-            ax.set_xlabel(self.X_LABEL)
-            ax.set_ylabel(self.Y_LABEL)
-            ax.set_title(f"{self.TITLE_PREFIX} [SIMULATED]")
-            fig.tight_layout()
-            plt.show()
-            return self._post_fit(alphas)
 
         # ── hardware: 2-for-loop scan ─────────────────────────────────────────
         def _make_prog(alpha_val, iter_val):

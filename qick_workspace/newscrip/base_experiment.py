@@ -3,7 +3,6 @@ BaseExperiment: Base class for all experiment wrappers.
 ========================================================
 Unifies the run (liveplot-first) and saveLabber logic.
 Subclasses only need to override a few methods + declare metadata.
-Supports `simulate=True` mode for hardware-free testing.
 """
 
 import numpy as np
@@ -24,7 +23,6 @@ class BaseExperiment:
     2. Override _create_program() — return the Program instance
     3. Override _extract_sweep_axis(prog) — return the sweep axis array
     4. Optionally override _post_fit() — perform fitting after liveplot
-    5. Optionally override _simulate() — return mock IQ data for simulate mode
 
     Example:
         class QubitSpec(BaseExperiment):
@@ -69,60 +67,17 @@ class BaseExperiment:
     # Unified entry point
     # ══════════════════════════════════════════════
 
-    def run(self, py_avg, simulate=False, show_final_plot=False, **kwargs):
+    def run(self, py_avg, show_final_plot=False, **kwargs):
         """
-        Execute the experiment with liveplot, or simulate without hardware.
+        Execute the experiment with liveplot.
 
         Args:
             py_avg: number of software averages
-            simulate: if True, bypass hardware and generate mock data
             **kwargs: extra args passed to subclass hooks
 
         Returns:
             Fitting result (if any), or None.
         """
-        # ── Simulate mode: no hardware needed ──
-        if simulate:
-            self._sweep_vals = self._mock_sweep_axis(**kwargs)
-            self._sweep_vals_y = self._mock_sweep_axis_y(**kwargs)
-
-            if self._sweep_vals_y is not None:
-                # 2D Simulation
-                self.iqdata = self._simulate(self._sweep_vals, self._sweep_vals_y)
-
-                # Show static plot (2D)
-                fig, ax = plt.subplots(figsize=(6, 5))
-                pcm = ax.pcolormesh(
-                    self._sweep_vals,
-                    self._sweep_vals_y,
-                    np.abs(self.iqdata),
-                    shading="auto",
-                )
-                ax.set_xlabel(self.X_LABEL)
-                ax.set_ylabel(self.Y_LABEL)
-                ax.set_title(f"{self.TITLE_PREFIX} [SIMULATED]")
-                fig.colorbar(pcm, ax=ax, label="ADC Units (Abs)")
-                fig.tight_layout()
-                plt.show()
-
-            else:
-                # 1D Simulation
-                self.iqdata = self._simulate(self._sweep_vals)
-
-                # Show static plot (1D)
-                fig, ax = plt.subplots(figsize=(6, 4))
-                ax.plot(
-                    self._sweep_vals, np.abs(self.iqdata), "o-", markersize=4, alpha=0.7
-                )
-                ax.set_xlabel(self.X_LABEL)
-                ax.set_ylabel("ADC Units (Abs)")
-                ax.set_title(f"{self.TITLE_PREFIX} [SIMULATED]")
-                fig.tight_layout()
-                plt.show()
-
-            return self._post_fit(self._sweep_vals)
-
-        # ── Normal hardware mode ──
         prog = self._create_program()
         self._sweep_vals_x = self._extract_sweep_axis(prog)
         self._sweep_vals_y = self._extract_sweep_axis_y(prog)
@@ -236,59 +191,6 @@ class BaseExperiment:
         Default: no fitting.
         """
         return None
-
-    def _simulate(self, x_pts):
-        """
-        Optional hook: generate mock IQ data for simulate mode.
-        Subclass should override to provide experiment-specific signals.
-        Default: raises NotImplementedError.
-        """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not support simulate mode. "
-            "Override _simulate(x_pts) or _simulate(x_pts, y_pts) to enable it."
-        )
-
-    def _mock_sweep_axis_y(self, **kwargs):
-        """
-        Optional: Generate y-axis sweep values without hardware.
-        Default: returns None.
-        """
-        # Allow explicit override via kwargs
-        if "y_pts" in kwargs:
-            return np.asarray(kwargs["y_pts"])
-        return None
-
-    def _mock_sweep_axis(self, **kwargs):
-        """
-        Generate sweep axis values without hardware.
-        Tries to extract from QickSweep1D objects in cfg, or from kwargs.
-        """
-        # Allow explicit override via kwargs
-        if "x_pts" in kwargs:
-            return np.asarray(kwargs["x_pts"])
-
-        # Try to extract from QickSweep1D objects in cfg
-        for key in self.SWEEP_KEYS_TO_REMOVE:
-            val = self.cfg.get(key)
-            if val is not None and hasattr(val, "start"):
-                try:
-                    span = (
-                        list(val.spans.values())[0]
-                        if hasattr(val, "spans") and val.spans
-                        else 0
-                    )
-                    stop = val.start + span
-                except Exception:
-                    # Fallback if spans dict isn't available
-                    stop = getattr(val, "stop", getattr(val, "maxval", val.start))
-
-                steps = self.cfg.get("steps", 101)
-                return np.linspace(val.start, stop, steps)
-
-        raise ValueError(
-            f"Cannot determine sweep axis for {self.__class__.__name__} in simulate mode. "
-            "Pass x_pts=np.linspace(...) explicitly."
-        )
 
     def _save_comment(self, dict_val):
         """

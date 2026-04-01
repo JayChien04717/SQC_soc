@@ -6,7 +6,6 @@ Sweeps qubit frequency and flux (hardware gain or Yoko).
 import numpy as np
 from .base_program import BaseProgram
 from .base_experiment import BaseExperiment
-from .mock_signals import mock_lorentzian
 
 class QubitSpecFluxProgram(BaseProgram):
     def _initialize(self, cfg):
@@ -78,19 +77,3 @@ class QubitSpecFlux(BaseExperiment):
         if "flux_ch" in self.cfg:
             return prog.get_pulse_param("flux_pulse", "gain", as_array=True)
         return None
-
-    def _simulate(self, x_pts, y_pts=None):
-        f_center = self.cfg.get("qb_freq_ge", (x_pts[0] + x_pts[-1]) / 2)
-        if hasattr(f_center, "start"):
-            f_center = (f_center.start + f_center.stop) / 2
-            
-        if y_pts is not None:
-            # 2D Simulation: shift qubit frequency with flux
-            data = np.zeros((len(y_pts), len(x_pts)), dtype=complex)
-            for i, y in enumerate(y_pts):
-                # Mock a parabolic flux shift (qubit is usually more sensitive than resonator)
-                shift = 50.0 * (y / 30000)**2 
-                data[i] = mock_lorentzian(x_pts, f0=f_center - shift, amp=-0.5, offset=1.0)
-            return data
-        else:
-            return mock_lorentzian(x_pts, f0=f_center, amp=-0.5, offset=1.0)

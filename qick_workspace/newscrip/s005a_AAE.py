@@ -55,21 +55,9 @@ class AAE:
         self.soccfg = soccfg
         self.cfg = config
 
-    def run(self, py_avg, iteration_count, simulate=False):
+    def run(self, py_avg, iteration_count):
         """Run with liveplot over N=0..iteration_count."""
         self.iter = np.arange(0, iteration_count, 1)
-
-        if simulate:
-            from .mock_signals import mock_aae
-            self.iqdata = mock_aae(iteration_count, noise=0.02)
-            fig, ax = plt.subplots(figsize=(8, 5))
-            ax.plot(self.iter, np.abs(self.iqdata), "o-", markersize=4)
-            ax.set_xlabel("N")
-            ax.set_ylabel("ADC Units (Abs)")
-            ax.set_title("Amplified Amplitude Error [SIMULATED]")
-            fig.tight_layout()
-            plt.show()
-            return
 
         def create_prog(n):
             self.cfg["steps"] = int(n)

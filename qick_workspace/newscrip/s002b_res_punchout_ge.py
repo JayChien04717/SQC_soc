@@ -48,23 +48,3 @@ class Punchout(BaseExperiment):
 
     def _extract_sweep_axis_y(self, prog):
         return prog.get_pulse_param("res_pulse", "gain", as_array=True)
-
-    def _mock_sweep_axis(self, **kwargs):
-        # Determine frequency (x) axis
-        res_freq = self.cfg.get("res_freq_ge")
-        if hasattr(res_freq, "start"):
-            return np.linspace(res_freq.start, res_freq.stop, self.cfg.get("f_steps", 51))
-        # Default fallback
-        return np.linspace(6000, 6100, self.cfg.get("f_steps", 51))
-
-    def _mock_sweep_axis_y(self, **kwargs):
-        # Determine gain (y) axis
-        res_gain = self.cfg.get("res_gain_ge")
-        if hasattr(res_gain, "start"):
-            return np.linspace(res_gain.start, res_gain.stop, self.cfg.get("g_steps", 11))
-        # Default fallback
-        return np.linspace(0, 1, self.cfg.get("g_steps", 11))
-
-    def _simulate(self, x_pts, y_pts):
-        from .mock_signals import mock_lorentzian_2d
-        return mock_lorentzian_2d(x_pts, y_pts, f0=(x_pts[0] + x_pts[-1]) / 2)

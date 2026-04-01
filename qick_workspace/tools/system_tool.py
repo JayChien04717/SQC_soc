@@ -418,29 +418,28 @@ class ExperimentConfig:
             is_list_val = isinstance(value, (list, np.ndarray))
             should_distribute = is_list_val and (len(value) == len(target_indices))
 
-            # Detect whether the key exists anywhere across all qubits
-            key_is_new_globally = not any(
+            # Check PER-QUBIT whether the key exists in its nested config.
+            # Any qubit that is missing the key AND is not being updated gets
+            # None padded, so the unified_config list length stays consistent.
+            has_key = [
                 self._find_key_path(self._raw_list[j], leaf_key) is not None
                 for j in range(len(self._raw_list))
-            )
+            ]
 
-            if key_is_new_globally:
-                # Brand-new key: pre-fill None at top level for non-target qubits
-                non_target_indices = [
-                    j for j in range(len(self._raw_list)) if j not in target_indices
-                ]
-                for j in non_target_indices:
+            for j in range(len(self._raw_list)):
+                if not has_key[j] and j not in target_indices:
+                    # Missing key, not being updated → pad with None at top level
                     self._raw_list[j][leaf_key] = None
 
-            # Write value(s) for target qubits via recursive search
+            # Write value(s) for target qubits
             for i, cfg_idx in enumerate(target_indices):
                 cfg = self._raw_list[cfg_idx]
                 val_to_set = value[i] if should_distribute else value
                 if isinstance(val_to_set, np.generic):
                     val_to_set = val_to_set.item()
 
-                if key_is_new_globally:
-                    # Put at top level (key didn't exist before)
+                if not has_key[cfg_idx]:
+                    # Key didn't exist yet in this qubit: put at top level
                     cfg[leaf_key] = val_to_set
                 else:
                     # Update wherever the key already lives
@@ -455,11 +454,10 @@ class ExperimentConfig:
             is_list_val = isinstance(value, (list, np.ndarray))
             should_distribute = is_list_val and (len(value) == len(target_indices))
 
-            # ── New-key detection ──────────────────────────────────────────────
-            # Check whether leaf_key already exists in ANY qubit's nested config.
-            # If it is completely new, pre-fill None in all qubits so that the
-            # unified_config list ends up with the correct length (one entry per
-            # qubit) instead of only one entry for the qubit that was updated.
+            # ── Per-qubit key existence check ──────────────────────────────────
+            # Check PER-QUBIT whether the key already exists at the given path.
+            # Any qubit missing the key that is NOT being updated gets None,
+            # keeping the unified_config list length consistent with other keys.
             def _key_exists_in(nested, path_keys):
                 """Return True if the leaf key is reachable via path_keys."""
                 curr = nested
@@ -469,17 +467,14 @@ class ExperimentConfig:
                     curr = curr[k]
                 return isinstance(curr, dict) and path_keys[-1] in curr
 
-            key_is_new_globally = not any(
+            has_key = [
                 _key_exists_in(self._raw_list[j], keys)
                 for j in range(len(self._raw_list))
-            )
+            ]
 
-            if key_is_new_globally:
-                # Pre-populate None for every qubit that is NOT in target_indices
-                non_target_indices = [
-                    j for j in range(len(self._raw_list)) if j not in target_indices
-                ]
-                for j in non_target_indices:
+            # Pre-populate None for qubits that are missing the key and not being updated
+            for j in range(len(self._raw_list)):
+                if not has_key[j] and j not in target_indices:
                     cfg_j = self._raw_list[j]
                     node = cfg_j
                     for k in keys[:-1]:

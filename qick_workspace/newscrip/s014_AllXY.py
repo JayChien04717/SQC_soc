@@ -77,13 +77,7 @@ class AllXY:
         self.soccfg = soccfg
         self.cfg = config
 
-    def run(self, py_avg, simulate=False):
-        if simulate:
-            from .mock_signals import mock_allxy
-            self.allxy_lst = mock_allxy(noise=0.02)
-            print("[SIMULATED] AllXY data generated (21 gate-pair sequences)")
-            return
-
+    def run(self, py_avg):
         allxy_lst = []
         for gate in tqdm(ALLXY_SEQUENCE, desc="AllXY"):
             self.cfg["allxy_gates"] = gate
