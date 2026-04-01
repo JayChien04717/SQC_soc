@@ -25,35 +25,23 @@ class DragProgram(BaseProgram):
         self.setup_resonator(cfg)
         self.declare_gen_auto(cfg["qb_ch"], cfg["nqz_qb"], "qb_mixer", cfg)
 
-        alpha = cfg.get("drag_alpha", 0.5)
-        delta = cfg["qb_freq_ge"] - cfg["qb_freq_ef"]
-
-        self.add_DRAG(
-            ch=cfg["qb_ch"],
-            name="drag_env",
-            sigma=cfg["sigma_ge"],
-            length=cfg.get("length_mult", 5) * cfg["sigma_ge"],
-            delta=delta,
-            alpha=alpha,
-            even_length=True,
-        )
-        self.add_pulse(
-            ch=cfg["qb_ch"],
-            name="x180",
-            style="arb",
-            envelope="drag_env",
-            freq=cfg["qb_freq_ge"],
+        # x180 / mx180: always use DRAG-shaped envelope (shape="drag"),
+        # but pulse_type (arb / flat_top / ...) follows cfg["pulse_type"].
+        self.setup_qb_pulse(
+            cfg,
+            prefix="ge",
+            shape="drag",
+            name="x180_ge",
             phase=0,
-            gain=cfg["pi_gain_ge"],
+            gain_key="pi_gain_ge",
         )
-        self.add_pulse(
-            ch=cfg["qb_ch"],
-            name="mx180",
-            style="arb",
-            envelope="drag_env",
-            freq=cfg["qb_freq_ge"],
+        self.setup_qb_pulse(
+            cfg,
+            prefix="ge",
+            shape="drag",
+            name="mx180_ge",
             phase=180,
-            gain=cfg["pi_gain_ge"],
+            gain_key="pi_gain_ge",
         )
 
     def _body(self, cfg):
@@ -64,9 +52,9 @@ class DragProgram(BaseProgram):
 
         iterations = int(cfg.get("iter", 10))
         for _ in range(iterations):
-            self.pulse(ch=cfg["qb_ch"], name="x180", t=0)
+            self.pulse(ch=cfg["qb_ch"], name="x180_ge", t=0)
             self.delay_auto(0.01)
-            self.pulse(ch=cfg["qb_ch"], name="mx180", t=0)
+            self.pulse(ch=cfg["qb_ch"], name="mx180_ge", t=0)
             self.delay_auto(0.01)
 
         self.measure(cfg)

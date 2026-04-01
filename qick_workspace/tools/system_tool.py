@@ -376,14 +376,20 @@ class ExperimentConfig:
             update(flat_dict, q_index="Q1")
             Merges a flat dictionary into the nested structure of the target qubit(s).
 
-        Mode 2: Path Update
-            update("res.res_freq_ge", 5000, "Q1")
+        Mode 2: Auto-search (no dots)
+            update("qb_freq_ge", 5000, "Q1")
+            Automatically finds where the key lives inside the nested config
+            and updates it.  No need to specify the parent section.
+
+        Mode 3: Explicit Path Update (dot notation)
+            update("qb.qb_freq_ge", 5000, "Q1")
             Updates a specific nested key using dot notation string.
 
         Parameters
         ----------
         param : Union[str, Dict]
-            Either a key path string (e.g., 'res.freq') or a flat dictionary.
+            Either a key path string (e.g., 'qb_freq_ge' or 'qb.qb_freq_ge')
+            or a flat dictionary.
         value : Any, optional
             The value to set if param is a string. Ignored if param is a dict.
         q_index : Union[int, str, List], optional
@@ -405,14 +411,88 @@ class ExperimentConfig:
                     f"Merged dictionary into {q_index}. Updated {updated_count} parameters."
                 )
 
-        # --- Mode 2: Path Update ---
-        elif isinstance(param, str):
-            key_path = param
-            keys = key_path.split(".")
+        # --- Mode 2: Auto-search (plain key, no dots) ---
+        elif isinstance(param, str) and "." not in param:
+            leaf_key = param
 
             is_list_val = isinstance(value, (list, np.ndarray))
             should_distribute = is_list_val and (len(value) == len(target_indices))
 
+            # Detect whether the key exists anywhere across all qubits
+            key_is_new_globally = not any(
+                self._find_key_path(self._raw_list[j], leaf_key) is not None
+                for j in range(len(self._raw_list))
+            )
+
+            if key_is_new_globally:
+                # Brand-new key: pre-fill None at top level for non-target qubits
+                non_target_indices = [
+                    j for j in range(len(self._raw_list)) if j not in target_indices
+                ]
+                for j in non_target_indices:
+                    self._raw_list[j][leaf_key] = None
+
+            # Write value(s) for target qubits via recursive search
+            for i, cfg_idx in enumerate(target_indices):
+                cfg = self._raw_list[cfg_idx]
+                val_to_set = value[i] if should_distribute else value
+                if isinstance(val_to_set, np.generic):
+                    val_to_set = val_to_set.item()
+
+                if key_is_new_globally:
+                    # Put at top level (key didn't exist before)
+                    cfg[leaf_key] = val_to_set
+                else:
+                    # Update wherever the key already lives
+                    self._recursive_update(cfg, leaf_key, val_to_set)
+
+        # --- Mode 3: Explicit Path Update (dot notation) ---
+        elif isinstance(param, str):
+            key_path = param
+            keys = key_path.split(".")
+            leaf_key = keys[-1]
+
+            is_list_val = isinstance(value, (list, np.ndarray))
+            should_distribute = is_list_val and (len(value) == len(target_indices))
+
+            # ── New-key detection ──────────────────────────────────────────────
+            # Check whether leaf_key already exists in ANY qubit's nested config.
+            # If it is completely new, pre-fill None in all qubits so that the
+            # unified_config list ends up with the correct length (one entry per
+            # qubit) instead of only one entry for the qubit that was updated.
+            def _key_exists_in(nested, path_keys):
+                """Return True if the leaf key is reachable via path_keys."""
+                curr = nested
+                for k in path_keys[:-1]:
+                    if not isinstance(curr, dict) or k not in curr:
+                        return False
+                    curr = curr[k]
+                return isinstance(curr, dict) and path_keys[-1] in curr
+
+            key_is_new_globally = not any(
+                _key_exists_in(self._raw_list[j], keys)
+                for j in range(len(self._raw_list))
+            )
+
+            if key_is_new_globally:
+                # Pre-populate None for every qubit that is NOT in target_indices
+                non_target_indices = [
+                    j for j in range(len(self._raw_list)) if j not in target_indices
+                ]
+                for j in non_target_indices:
+                    cfg_j = self._raw_list[j]
+                    node = cfg_j
+                    for k in keys[:-1]:
+                        if isinstance(node, dict):
+                            node = node.setdefault(k, {})
+                        else:
+                            node = getattr(node, k)
+                    if isinstance(node, dict):
+                        node[leaf_key] = None
+                    else:
+                        setattr(node, leaf_key, None)
+
+            # ── Write target value(s) ──────────────────────────────────────────
             for i, cfg_idx in enumerate(target_indices):
                 cfg = self._raw_list[cfg_idx]
                 target = cfg
@@ -436,9 +516,9 @@ class ExperimentConfig:
 
                 # Set value
                 if isinstance(target, dict):
-                    target[keys[-1]] = val_to_set
+                    target[leaf_key] = val_to_set
                 else:
-                    setattr(target, keys[-1], val_to_set)
+                    setattr(target, leaf_key, val_to_set)
 
         else:
             raise TypeError(
@@ -446,6 +526,32 @@ class ExperimentConfig:
             )
 
         self._mark_dirty()
+
+    def _find_key_path(self, nested, target_key, _path=()) -> Optional[tuple]:
+        """
+        Recursively search for *target_key* in *nested* and return the tuple
+        of keys that leads to it, or None if not found.
+
+        Example::
+
+            cfg = {'qb': {'qb_freq_ge': 5000}}
+            self._find_key_path(cfg, 'qb_freq_ge')  # -> ('qb', 'qb_freq_ge')
+        """
+        if isinstance(nested, dict):
+            if target_key in nested:
+                return _path + (target_key,)
+            for k, v in nested.items():
+                if isinstance(v, (dict, list)):
+                    result = self._find_key_path(v, target_key, _path + (k,))
+                    if result is not None:
+                        return result
+        elif isinstance(nested, list):
+            for item in nested:
+                if isinstance(item, (dict, list)):
+                    result = self._find_key_path(item, target_key, _path)
+                    if result is not None:
+                        return result
+        return None
 
     def _recursive_update(self, nested_data, target_key, new_value) -> bool:
         """Helper to recursively find a key in nested structure and update it."""

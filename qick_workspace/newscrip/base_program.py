@@ -142,14 +142,17 @@ class BaseProgram(AveragerProgramV2):
         Args:
             cfg:          configuration dict
             prefix:       'ge' or 'ef' — selects channel, freq, sigma keys
-            pulse_type:   'const', 'arb', or 'flat_top' (default: cfg["pulse_type"])
-            shape:        envelope shape — 'gauss' or 'cosine'
+            pulse_type:   'const', 'arb', 'flat_top', or 'drag'
+                          (default: cfg["pulse_type"]; 'drag' uses DRAG envelope + arb style)
+            shape:        envelope shape for arb/flat_top — 'gauss', 'cosine', or 'drag'
+                          (ignored when pulse_type='drag', which forces shape='drag')
             name:         pulse name
-            phase:        phase in degrees (default: cfg["qb_phase"] / cfg["qb_phase_ef"])
+            phase:        phase in degrees (default: cfg["qb_phase"])
             gain_key:     explicit cfg key for gain (default: f"qb_gain_{prefix}")
             gain_override: explicit gain value (overrides gain_key when not None)
             ch:           explicit channel override
-            length_mult:  gauss envelope length = sigma * length_mult (default 5), cosine envelope length = sigma
+            length_mult:  gauss/drag envelope length = sigma * length_mult (default 5)
+                          cosine envelope length = sigma
         """
         # Resolve channel
         if ch is None:
@@ -158,6 +161,10 @@ class BaseProgram(AveragerProgramV2):
         # Resolve pulse type from config if not specified
         if pulse_type is None:
             pulse_type = cfg.get("pulse_type", "arb")
+
+        # 'drag' pulse_type forces DRAG envelope; treat it as 'arb' for the add_pulse stage
+        if pulse_type == "drag":
+            shape = "drag"
 
         # Resolve phase from config if not specified
         if phase is None:
@@ -176,7 +183,7 @@ class BaseProgram(AveragerProgramV2):
 
         # Add envelope if needed (deduplicated per channel+prefix+shape)
         env_name = None
-        if pulse_type in ("arb", "flat_top"):
+        if pulse_type in ("arb", "flat_top", "drag"):
             env_name = f"env_{prefix}_{shape}"
             if not hasattr(self, "_added_envs"):
                 self._added_envs = set()
@@ -198,6 +205,22 @@ class BaseProgram(AveragerProgramV2):
                         length=sigma,
                         even_length=True,
                     )
+                elif shape == "drag":
+                    delta = cfg["qb_freq_ge"] - cfg["qb_freq_ef"]
+                    if "drag_alpha" not in cfg:
+                        raise KeyError(
+                            "no parameter 'drag_alpha' found in cfg — calibrate DRAG first (run s005a_drag.py)"
+                        )
+                    alpha = cfg["drag_alpha"]
+                    self.add_DRAG(
+                        ch=ch,
+                        name=env_name,
+                        sigma=sigma,
+                        length=sigma * length_mult,
+                        delta=delta,
+                        alpha=alpha,
+                        even_length=True,
+                    )
                 else:
                     raise ValueError(f"Unknown pulse shape: {shape}")
                 self._added_envs.add(env_key)
@@ -213,7 +236,7 @@ class BaseProgram(AveragerProgramV2):
                 phase=phase,
                 gain=gain,
             )
-        elif pulse_type == "arb":
+        elif pulse_type in ("arb", "drag"):  # drag envelope already built above
             self.add_pulse(
                 ch=ch,
                 name=name,
@@ -233,36 +256,6 @@ class BaseProgram(AveragerProgramV2):
                 phase=phase,
                 gain=gain,
                 length=cfg[f"qb_flat_top_length_{prefix}"],
-            )
-        elif pulse_type == "drag":
-            # Add DRAG envelope (deduplicated per channel+prefix)
-            env_name = f"env_{prefix}_drag"
-            if not hasattr(self, "_added_envs"):
-                self._added_envs = set()
-            env_key = (ch, env_name)
-            if env_key not in self._added_envs:
-                delta = cfg["qb_freq_ge"] - cfg["qb_freq_ef"]  # detuning for DRAG
-                alpha = cfg.get("drag_alpha", 0.5)
-                self.add_DRAG(
-                    ch=ch,
-                    name=env_name,
-                    sigma=cfg[f"sigma_{prefix}"],
-                    length=cfg[f"sigma_{prefix}"] * length_mult,
-                    delta=delta,
-                    alpha=alpha,
-                    even_length=True,
-                )
-                self._added_envs.add(env_key)
-
-            # Add pulse using the DRAG envelope
-            self.add_pulse(
-                ch=ch,
-                name=name,
-                style="arb",
-                envelope=env_name,
-                freq=freq,
-                phase=phase,
-                gain=gain,
             )
 
     def setup_standard_gates(self, cfg, prefix="ge", pulse_type=None, shape="gauss"):
