@@ -93,6 +93,15 @@ def _fit_gmm(I_projs, xlims, n_init=5, max_components=2):
       clean |g⟩, then place the Bayes-optimal boundary between the
       per-state likelihoods.
 
+    Component budget per state
+    --------------------------
+    All states allow up to max_components via BIC selection.
+    |g⟩ can legitimately have a small secondary mode from thermal population
+    (typically < 15%).  However, if BIC selects 2 components for |g⟩ and the
+    secondary weight exceeds 0.30, it is treated as overfitting of the |e⟩
+    overlap tail and |g⟩ is refit with a single component.
+    |e⟩ and higher states always allow 2 components for T1-decay tails.
+
     Parameters
     ----------
     I_projs : list of ndarray
@@ -102,7 +111,7 @@ def _fit_gmm(I_projs, xlims, n_init=5, max_components=2):
     n_init : int
         GMM random restarts per candidate k.
     max_components : int
-        Maximum number of Gaussian components per state (default 2).
+        Maximum number of Gaussian components for non-ground states (default 2).
 
     Returns
     -------
@@ -117,9 +126,25 @@ def _fit_gmm(I_projs, xlims, n_init=5, max_components=2):
     n_states = len(I_projs)
 
     # ── Fit each state independently ──────────────────────────────────────
+    # All states allow up to max_components so that:
+    # - |g⟩ can model a small thermal-population secondary mode
+    # - |e⟩/|f⟩ can model T1-decay tails
+    #
+    # Guard for |g⟩ (index 0): if the secondary Gaussian weight is large
+    # (> 0.30), it is almost certainly overfitting the overlap tail from |e⟩
+    # rather than a real thermal population (which is typically < 15%).
+    # In that case, refit |g⟩ with a single component.
+    _MAX_G_SECONDARY = 0.30
     state_gmms = []
-    for proj in I_projs:
+    for i, proj in enumerate(I_projs):
         gmm = _bic_gmm(proj.reshape(-1, 1), max_components, n_init)
+        if i == 0 and gmm.n_components > 1:
+            # Check secondary weight
+            dominant_w = float(np.max(gmm.weights_))
+            secondary_w = 1.0 - dominant_w
+            if secondary_w > _MAX_G_SECONDARY:
+                # Refit with 1 component — overlap tail, not thermal population
+                gmm = _bic_gmm(proj.reshape(-1, 1), 1, n_init)
         state_gmms.append(gmm)
 
     # ── Primary component per state (highest-weight Gaussian) ─────────────
