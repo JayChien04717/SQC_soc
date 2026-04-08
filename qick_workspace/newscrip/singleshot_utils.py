@@ -178,15 +178,21 @@ def _fit_gmm(I_projs, xlims, n_init=5, max_components=2):
             conf_matrix[i, j] = np.mean(preds == j)
 
     # ── Thresholds: Bayes log-likelihood crossings ─────────────────────────
+    # Take the crossing closest to the midpoint of the two adjacent primary
+    # means, not cross[0].  Multi-component GMMs can produce spurious early
+    # crossings far from the true decision boundary.
     thresholds = []
     for k in range(n_states - 1):
         s1, s2 = state_order[k], state_order[k + 1]
+        midpoint = (primary_means[s1] + primary_means[s2]) / 2
         diff  = log_liks_dense[s1] - log_liks_dense[s2]
         cross = np.where(np.diff(np.sign(diff)))[0]
         if cross.size:
-            t = float(x_dense[cross[0]])
+            cross_vals = x_dense[cross, 0]
+            best = cross_vals[np.argmin(np.abs(cross_vals - midpoint))]
+            t = float(best)
         else:
-            t = float((primary_means[s1] + primary_means[s2]) / 2)
+            t = float(midpoint)
         thresholds.append(t)
 
     return (state_gmms, state_order, conf_matrix, thresholds,
@@ -262,12 +268,56 @@ def general_hist(iqshots, state_labels, g_states, e_states, e_label="e",
     n_states = len(iqshots)
 
     # ── 1. Rotation angle ──────────────────────────────────────────────────
+    # Two-pass refinement when theta is auto-computed:
+    #   Pass 1 — raw IQ mean → coarse theta (fast, no model)
+    #   Pass 2 — fit 1D GMM on coarse-rotated I projections, use primary
+    #             Gaussian means as reference → refined theta
+    # This prevents T1-decay tails and thermal population secondary modes
+    # from biasing the rotation axis.
     if not amplitude_mode:
         if theta is None:
             g_c = np.concatenate([iqshots[i][0] + 1j * iqshots[i][1] for i in g_states])
             e_c = np.concatenate([iqshots[i][0] + 1j * iqshots[i][1] for i in e_states])
+
+            # Pass 1: coarse rotation from raw means
             theta_rad = -np.arctan2(np.mean(e_c.imag) - np.mean(g_c.imag),
                                     np.mean(e_c.real) - np.mean(g_c.real))
+
+            def _make_rot(tr):
+                def _rot_I(c):
+                    return c.real * np.cos(tr) - c.imag * np.sin(tr)
+                def _rot_IQ(c):
+                    I = c.real * np.cos(tr) - c.imag * np.sin(tr)
+                    Q = c.real * np.sin(tr) + c.imag * np.cos(tr)
+                    return I, Q
+                return _rot_I, _rot_IQ
+
+            _rot_I_coarse, _ = _make_rot(theta_rad)
+
+            # Pass 2: fit GMM on coarse I-projections, use primary means
+            if _HAS_SKLEARN:
+                try:
+                    g_proj_coarse = _rot_I_coarse(g_c)
+                    e_proj_coarse = _rot_I_coarse(e_c)
+                    gmm_g = _bic_gmm(g_proj_coarse.reshape(-1, 1), 2, 5)
+                    gmm_e = _bic_gmm(e_proj_coarse.reshape(-1, 1), 2, 5)
+                    # Primary mean = component with highest weight
+                    g_primary_I = float(gmm_g.means_[np.argmax(gmm_g.weights_), 0])
+                    e_primary_I = float(gmm_e.means_[np.argmax(gmm_e.weights_), 0])
+                    # Back-project primary means to original 2D space to get refined angle
+                    # The coarse rotation already put g/e mostly on the I axis;
+                    # refine by computing the angle correction from primary I positions.
+                    # In the coarse-rotated frame the primary g/e centroids are
+                    # (g_primary_I, Q_g_mean) and (e_primary_I, Q_e_mean).
+                    Q_g_mean = float(np.mean(g_c.real * np.sin(theta_rad) + g_c.imag * np.cos(theta_rad)))
+                    Q_e_mean = float(np.mean(e_c.real * np.sin(theta_rad) + e_c.imag * np.cos(theta_rad)))
+                    dI = e_primary_I - g_primary_I
+                    dQ = Q_e_mean - Q_g_mean
+                    # Additional rotation to align g→e direction to I axis
+                    delta = np.arctan2(dQ, dI)
+                    theta_rad = theta_rad + delta
+                except Exception:
+                    pass  # keep coarse theta on any failure
         else:
             theta_rad = float(theta) * np.pi / 180.0
 
