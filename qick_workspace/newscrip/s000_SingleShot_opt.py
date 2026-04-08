@@ -157,48 +157,51 @@ class SingleShot_ge_opt:
         }
 
     @staticmethod
-    def _gmm_fidelity(I_g, Q_g, I_e, Q_e):
+    def _lda_fidelity(I_g, Q_g, I_e, Q_e, cv=5):
         """
-        Fit a 2-component GMM in the 2D IQ plane and return the mean
-        confusion-matrix diagonal as fidelity.
+        Estimate readout fidelity via cross-validated LDA.
 
-        Using full 2D IQ (not a 1D projection) avoids the need to choose a
-        rotation angle and naturally handles any IQ cloud orientation.
+        Why LDA instead of unsupervised GMM:
+        - GMM is unsupervised — it does not know which shots are g vs e.
+          With overlapping clouds and few shots it overfits, giving
+          inflated in-sample fidelity that disagrees with the final result.
+        - LDA is a supervised Bayes-optimal linear classifier.  It uses the
+          known labels, so there is no label-ambiguity and no overfitting
+          from cluster assignment.
+        - Cross-validation removes in-sample bias: the score predicts how
+          well the classifier generalises, matching what the final single-
+          shot measurement will report.
 
-        Returns 0.0 if the GMM fit fails or the data is degenerate.
+        Parameters
+        ----------
+        cv : int
+            Number of cross-validation folds (default 5).
+            Increase to 10 for smoother estimates at the cost of speed.
+
+        Returns 0.0 if the fit fails or data is degenerate.
         """
-        from sklearn.mixture import GaussianMixture
+        from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+        from sklearn.model_selection import StratifiedKFold, cross_val_score
 
         X_g = np.column_stack([I_g, Q_g])
         X_e = np.column_stack([I_e, Q_e])
-        X_all = np.vstack([X_g, X_e])
+        X   = np.vstack([X_g, X_e])
+        y   = np.array([0] * len(X_g) + [1] * len(X_e))
 
-        try:
-            gmm = GaussianMixture(
-                n_components=2, covariance_type="full", n_init=3, random_state=0
-            )
-            gmm.fit(X_all)
-        except Exception:
+        # Need at least cv samples per class
+        n_min = min(len(X_g), len(X_e))
+        if n_min < cv:
             return 0.0
 
-        # Assign GMM component 0/1 to g/e by comparing cluster centres to
-        # the mean IQ of each prepared state (nearest-centre assignment).
-        centres = gmm.means_                           # shape (2, 2)
-        mean_g  = np.array([np.mean(I_g), np.mean(Q_g)])
-        mean_e  = np.array([np.mean(I_e), np.mean(Q_e)])
-
-        dist_g  = np.linalg.norm(centres - mean_g, axis=1)  # (2,)
-        label_g = int(np.argmin(dist_g))                     # GMM label → g
-        label_e = 1 - label_g                                # GMM label → e
-
-        # Predict every shot and count confusion matrix
-        pred_g = gmm.predict(X_g)   # predicted GMM label for each g shot
-        pred_e = gmm.predict(X_e)
-
-        acc_g = np.mean(pred_g == label_g)   # P(declare g | prepared g)
-        acc_e = np.mean(pred_e == label_e)   # P(declare e | prepared e)
-
-        return float((acc_g + acc_e) / 2)
+        try:
+            lda    = LinearDiscriminantAnalysis()
+            cv_obj = StratifiedKFold(n_splits=cv, shuffle=True, random_state=0)
+            # balanced_accuracy = mean(diag(confusion_matrix))
+            scores = cross_val_score(lda, X, y, cv=cv_obj,
+                                     scoring="balanced_accuracy")
+            return float(np.mean(scores))
+        except Exception:
+            return 0.0
 
     def analyze(self):
         try:
@@ -224,7 +227,7 @@ class SingleShot_ge_opt:
         I_e_data = self.data["Ie"]
         Q_e_data = self.data["Qe"]
 
-        for l_idx in tqdm(range(len_L), desc="Analyze GMM fidelity"):
+        for l_idx in tqdm(range(len_L), desc="Analyze LDA fidelity"):
             for g_idx in range(len_G):
                 for f_idx in range(len_F):
                     I_g = I_g_data[l_idx, g_idx, f_idx]
@@ -232,7 +235,7 @@ class SingleShot_ge_opt:
                     I_e = I_e_data[l_idx, g_idx, f_idx]
                     Q_e = Q_e_data[l_idx, g_idx, f_idx]
 
-                    fid_Array[l_idx, g_idx, f_idx] = self._gmm_fidelity(
+                    fid_Array[l_idx, g_idx, f_idx] = self._lda_fidelity(
                         I_g, Q_g, I_e, Q_e
                     )
 
