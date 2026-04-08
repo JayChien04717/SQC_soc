@@ -29,7 +29,7 @@ class QubitSpecEfProgram(BaseProgram):
         self.pulse(ch=cfg["qb_ch_ef"], name="qb_pulse_ef", t=0)
         if cfg.get("ge_ref", False):
             self.pulse(ch=cfg["qb_ch"], name="qb_pi_pulse", t=0)
-            self.delay_auto(0.01)
+            self.delay_auto(0.02)
         self.delay_auto(0.02)
         self.measure(cfg)
 

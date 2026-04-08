@@ -4,6 +4,7 @@ s014 — AllXY
 Gate error diagnostic: iterates over 21 gate-pair sequences.
 Uses setup_standard_gates() for automatic pulse declaration.
 """
+
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm.auto import tqdm
@@ -41,11 +42,12 @@ ALLXY_SEQUENCE = [
 
 # ── Program ──
 
+
 class AllXYProgram(BaseProgram):
     def _initialize(self, cfg):
         self.setup_resonator(cfg)
-        self.setup_qubit_gen(cfg, 'ge')
-        self.setup_standard_gates(cfg, prefix='ge')
+        self.setup_qubit_gen(cfg, "ge")
+        self.setup_standard_gates(cfg, prefix="ge")
 
     def _body(self, cfg):
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
@@ -69,6 +71,7 @@ class AllXYProgram(BaseProgram):
 
 # ── Experiment ──
 
+
 class AllXY:
     """AllXY gate error diagnostic (21 gate-pair sequences)."""
 
@@ -82,21 +85,35 @@ class AllXY:
         for gate in tqdm(ALLXY_SEQUENCE, desc="AllXY"):
             self.cfg["allxy_gates"] = gate
             prog = AllXYProgram(
-                self.soccfg, reps=self.cfg["reps"],
-                final_delay=self.cfg["relax_delay"], cfg=self.cfg,
+                self.soccfg,
+                reps=self.cfg["reps"],
+                final_delay=self.cfg["relax_delay"],
+                cfg=self.cfg,
             )
             iq_list = prog.acquire(self.soc, rounds=py_avg, progress=False)
             allxy_lst.append(iq_list[0][0].dot([1, 1j]))
         self.allxy_lst = np.array(allxy_lst)
 
     def plot(self):
-        amp = np.abs(self.allxy_lst)
+        amp = np.real(self.allxy_lst)
         if amp[0] < amp[-1]:
-            ref = [np.min(amp)] * 5 + [(np.max(amp) + np.min(amp)) / 2] * 12 + [np.max(amp)] * 4
+            ref = (
+                [np.min(amp)] * 5
+                + [(np.max(amp) + np.min(amp)) / 2] * 12
+                + [np.max(amp)] * 4
+            )
         else:
-            ref = [np.max(amp)] * 5 + [(np.max(amp) + np.min(amp)) / 2] * 12 + [np.min(amp)] * 4
+            ref = (
+                [np.max(amp)] * 5
+                + [(np.max(amp) + np.min(amp)) / 2] * 12
+                + [np.min(amp)] * 4
+            )
         if len(ref) != len(amp):
-            ref = ref[:len(amp)] if len(ref) > len(amp) else ref + [ref[-1]] * (len(amp) - len(ref))
+            ref = (
+                ref[: len(amp)]
+                if len(ref) > len(amp)
+                else ref + [ref[-1]] * (len(amp) - len(ref))
+            )
 
         plt.figure(figsize=(10, 5))
         plt.plot(amp, "bo", label="Data")
@@ -114,8 +131,13 @@ class AllXY:
         dict_val = config_to_yaml(self.cfg)
         hdf5_generator(
             filepath=file_path,
-            x_info={"name": "Sequence", "unit": "None", "values": np.arange(len(ALLXY_SEQUENCE))},
+            x_info={
+                "name": "Sequence",
+                "unit": "None",
+                "values": np.arange(len(ALLXY_SEQUENCE)),
+            },
             z_info={"name": "Signal", "unit": "ADC unit", "values": self.allxy_lst},
-            comment=f"{dict_val}", tag="ALLXY",
+            comment=f"{dict_val}",
+            tag="ALLXY",
         )
         print(f"Data save to {file_path}")

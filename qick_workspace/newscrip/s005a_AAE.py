@@ -7,6 +7,7 @@ Amplitude Rabi: sweeps qubit drive gain at fixed length.
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
+from scipy.ndimage import gaussian_filter1d
 from IPython.display import display, clear_output, update_display
 from tqdm.auto import tqdm
 
@@ -162,39 +163,69 @@ class PowerRabiChevron(BaseExperiment):
 
         gains = self._sweep_vals_x
         iters = self._sweep_vals_y
+        raw_sum_trace = np.sum(np.abs(self.iqdata), axis=0)
 
-        # Sum all iteration traces (abs) to amplify the error
-        sum_trace = np.sum(np.abs(self.iqdata), axis=0)  # shape: (n_gains,)
+        sum_trace = gaussian_filter1d(raw_sum_trace, sigma=2.0)
 
-        # Perfect pi gain should result in max excitation amplitude in summed trace
+        # FFT 估算主頻率 → sinc width
+        dx = gains[1] - gains[0]
+        fft_vals = np.abs(np.fft.rfft(sum_trace - np.mean(sum_trace)))
+        fft_freqs = np.fft.rfftfreq(len(gains), d=dx)
+        freq_guess = fft_freqs[np.argmax(fft_vals[1:]) + 1]
+        width_guess = 0.5 / freq_guess  # sinc² 第一零點在 g0 ± width
+
+        amp_guess = (np.max(sum_trace) - np.min(sum_trace)) / 2
+        off_guess = np.mean(sum_trace)
+
+        # contrast 方向：spike 已被 sigma=2 壓掉，直接用平滑極值
         idx_max = int(np.argmax(sum_trace))
-        optimal_gain = gains[idx_max]
+        idx_min = int(np.argmin(sum_trace))
+        if abs(sum_trace[idx_max] - off_guess) >= abs(sum_trace[idx_min] - off_guess):
+            x0_guess = gains[idx_max]
+            sign_guess = 1.0
+        else:
+            x0_guess = gains[idx_min]
+            sign_guess = -1.0
 
-        # Parabola sub-pixel refinement around the max peak
+        # np.sinc(x) = sin(πx)/(πx)，所以傳入 (g - g0)/width 即可
+        def sinc2_model(x, A, x0, width, offset):
+            return A * np.sinc((x - x0) / width) ** 2 + offset
+
+        fit_success = False
+        optimal_gain = x0_guess
+
         try:
-
-            def parabola(x, a, b, c):
-                return a * (x - b) ** 2 + c
-
-            i0 = max(idx_max - 3, 0)
-            i1 = min(idx_max + 4, len(gains))
+            p0 = [sign_guess * amp_guess, x0_guess, width_guess, off_guess]
             popt, _ = curve_fit(
-                parabola,
-                gains[i0:i1],
-                sum_trace[i0:i1],
-                p0=[-1.0, gains[idx_max], sum_trace[idx_max]],
+                sinc2_model,
+                gains,
+                sum_trace,
+                p0=p0,
+                bounds=(
+                    [-np.inf, gains.min(), dx, -np.inf],
+                    [np.inf, gains.max(), np.inf, np.inf],
+                ),
+                maxfev=10000,
             )
-            if gains.min() <= popt[1] <= gains.max():
-                optimal_gain = popt[1]
-        except Exception:
-            pass
 
-        print(f"\n[AAE Gain] Optimal pi gain = {optimal_gain:.6f}")
+            A_fit, x0_fit, width_fit, offset_fit = popt
 
-        # ── Plot ─────────────────────────────────────────────────────────────
+            # sinc² 的主極值就在 x0，不需要再掃 fine_x
+            # 但仍然要確認 x0 在掃描範圍內
+            if gains.min() <= x0_fit <= gains.max():
+                optimal_gain = x0_fit
+                fit_success = True
+            else:
+                print("Fit x0 out of range, falling back.")
+
+        except Exception as e:
+            print(f"Fit failed: {e}, falling back to smoothed extremum.")
+
+        print(f"\n[PowerRabi] Optimal pi gain = {optimal_gain:.6f}")
+
+        # ── 繪圖 ──────────────────────────────────────────────────────────────────
         fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
-        # Left: 2D heatmap
         ax0 = axes[0]
         im = ax0.pcolormesh(
             gains, iters, np.abs(self.iqdata), shading="auto", cmap="viridis"
@@ -204,46 +235,36 @@ class PowerRabiChevron(BaseExperiment):
             optimal_gain,
             color="red",
             linestyle="--",
-            linewidth=2,
-            label=f"Gain={optimal_gain:.4f}",
+            alpha=0.8,
+            label=f"Fit={optimal_gain:.4f}",
         )
-        ax0.set_xlabel(self.X_LABEL)
-        ax0.set_ylabel("Iterations (N)")
         ax0.set_title("Power Rabi Chevron")
-        ax0.legend(fontsize=9)
+        ax0.legend()
 
-        # Right: Summed trace
         ax1 = axes[1]
-        ax1.plot(
-            gains,
-            sum_trace,
-            "o-",
-            color="steelblue",
-            linewidth=2,
-            markersize=5,
-            label="Σ iterations",
+        ax1.scatter(
+            gains, raw_sum_trace, s=20, color="steelblue", alpha=0.5, label="Raw Data"
         )
-        ax1.axvline(
-            optimal_gain,
-            color="red",
-            linestyle="--",
-            linewidth=2,
-            label=f"Gain={optimal_gain:.4f}",
-        )
-        ax1.set_xlabel(self.X_LABEL)
-        ax1.set_ylabel("Summed ADC Units (Abs)")
-        ax1.set_title("Summed Trace")
-        ax1.legend(fontsize=9)
-        ax1.grid(True, alpha=0.3)
+        ax1.plot(gains, sum_trace, "--", color="gray", alpha=0.7, label="Smoothed")
 
-        fig.suptitle(self.TITLE_PREFIX, fontsize=13)
-        fig.tight_layout()
+        if fit_success:
+            fine_x = np.linspace(gains.min(), gains.max(), 2000)
+            ax1.plot(
+                fine_x,
+                sinc2_model(fine_x, *popt),
+                color="firebrick",
+                lw=2,
+                label="Sinc² Fit",
+            )
+
+        ax1.axvline(optimal_gain, color="red", linestyle="--")
+        ax1.set_title("Summed Trace & Physical Fit")
+        ax1.legend()
+        ax1.grid(True, alpha=0.2)
+        plt.tight_layout()
         plt.show()
 
-        self.fit_params = {
-            "optimal_gain": round(float(optimal_gain), 6),
-        }
-        return self.fit_params
+        return optimal_gain
 
     def _save_comment(self, dict_val):
         if self.fit_params:

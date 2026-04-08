@@ -1,518 +1,583 @@
 """
+single_qubit_rb.py
+==================
 Single-qubit Randomized Benchmarking — Clifford sequence generator
-===================================================================
-Gates: I, X, Y, X/2, Y/2, -X/2, -Y/2  (no external packages beyond numpy/scipy)
+-------------------------------------------------------------------
+Gates : I, X, Y, X/2, Y/2, -X/2, -Y/2  (numpy / scipy only)
 
-Clifford group (24 elements) is parametrised as SU(2) matrices and each element
-is pre-decomposed into a short pulse sequence drawn from the gate set above.
+Public API
+----------
+    rb = SingleQubitRB()
 
-Supports
---------
-  Standard RB  : generate_rb_sequence(n_cliffords, seed)
-  Interleaved RB: generate_irb_sequence(n_cliffords, interleave_gate, seed)
+    # Standard RB — one sample
+    seq = rb.generate_single_qb_rb(n_cliffords=10, n_samples=30)
 
-IRB workflow
+    # Interleaved RB — interleave_gate ∈ {"X", "Y", "X/2", "Y/2"}
+    seq = rb.generate_single_qb_rb(n_cliffords=10, n_samples=30,
+                                   interleave_gate="X")
+
+    Each element of `seq` is an RBSequence dataclass:
+        .clifford_indices  list[int]       random Clifford indices
+        .recovery_index    int             inverse / recovery Clifford
+        .pulse_sequence    list[str]       flat primitive-gate list
+                                           (includes recovery gate)
+        .U_accumulated     np.ndarray 2×2  product of random (+ interleaved) gates
+        .U_recovery        np.ndarray 2×2  recovery gate matrix
+
+IRB analysis
 ------------
-  1. Run standard RB  → fit decay  → get reference fidelity r_ref
-  2. Run IRB with gate G interleaved → fit decay → get r_irb
-  3. Gate fidelity of G:
-       F_gate = 1 - (d-1)/d * (r_irb/r_ref - 1)   d=2 for 1 qubit
-       EPC     = (d-1)/d * (1 - r_irb/r_ref)
+    epc, f_gate, bound = SingleQubitRB.epc_from_rb_irb(p_ref, p_irb)
+
+    where p_ref / p_irb are the depolarizing parameters from fitting
+        P(m) = A · p^m + B
+    to the standard-RB and IRB survival-probability curves respectively.
 """
 
+from __future__ import annotations
+
 import numpy as np
-from scipy.linalg import expm
+from dataclasses import dataclass, field
+from typing import List, Optional, Union
 
-# ─────────────────────────────────────────────
-# 1. Primitive gate matrices  (SU(2) or U(2))
-# ─────────────────────────────────────────────
 
-def _Rx(theta):
-    c, s = np.cos(theta / 2), np.sin(theta / 2)
-    return np.array([[c, -1j * s],
-                     [-1j * s,  c]], dtype=complex)
+# ══════════════════════════════════════════════════════════════════
+# 0.  Return-value container
+# ══════════════════════════════════════════════════════════════════
 
-def _Ry(theta):
-    c, s = np.cos(theta / 2), np.sin(theta / 2)
-    return np.array([[c, -s],
-                     [s,  c]], dtype=complex)
+@dataclass
+class RBSequence:
+    """One complete RB (or IRB) gate sequence including the recovery gate."""
+    clifford_indices : List[int]        # random Clifford indices
+    recovery_index   : int              # index of recovery Clifford
+    pulse_sequence   : List[str]        # flat primitive list (random + recovery)
+    U_accumulated    : np.ndarray       # product of random (+ interleaved) gates
+    U_recovery       : np.ndarray       # recovery gate matrix
 
-# Named primitives
-GATE_MATRIX = {
-    "I"   : np.eye(2, dtype=complex),
-    "X"   : _Rx(np.pi),
-    "Y"   : _Ry(np.pi),
-    "X/2" : _Rx(np.pi / 2),
-    "Y/2" : _Ry(np.pi / 2),
-    "-X/2": _Rx(-np.pi / 2),
-    "-Y/2": _Ry(-np.pi / 2),
-}
 
-def seq_to_matrix(pulse_list):
-    """Multiply a list of gate name strings left-to-right (first applied first)."""
-    U = np.eye(2, dtype=complex)
-    for g in pulse_list:
-        U = GATE_MATRIX[g] @ U
-    return U
+# ══════════════════════════════════════════════════════════════════
+# 1.  SingleQubitRB
+# ══════════════════════════════════════════════════════════════════
 
-# ─────────────────────────────────────────────
-# 2. All 24 single-qubit Cliffords
-#    Each entry: {"matrix": U, "pulses": [...]}
-#    Pulses are the physical sequence that realises the Clifford.
-# ─────────────────────────────────────────────
-
-# We generate all 24 by exhaustive composition and then assign pulse sequences.
-# The canonical decomposition follows the Eppstein / Barends convention:
-#   every Clifford can be written as (optional Y/2 or -Y/2) * (optional X/2 or X or -X/2) * (optional Y/2 or -Y/2)
-# We just hard-code the 24 decompositions for clarity and reproducibility.
-
-_RAW_CLIFFORDS = [
-    # ── Pauli-like ──────────────────────────────────────────────
-    ("C0",  ["I"]),
-    ("C1",  ["X"]),
-    ("C2",  ["Y"]),
-    ("C3",  ["X", "Y"]),          # = Z  (up to phase)
-
-    # ── π/2 around X / Y ────────────────────────────────────────
-    ("C4",  ["X/2"]),
-    ("C5",  ["-X/2"]),
-    ("C6",  ["Y/2"]),
-    ("C7",  ["-Y/2"]),
-
-    # ── Hadamard-like ────────────────────────────────────────────
-    ("C8",  ["X", "Y/2"]),
-    ("C9",  ["X", "-Y/2"]),
-    ("C10", ["Y", "X/2"]),
-    ("C11", ["Y", "-X/2"]),
-
-    # ── 2π/3 rotations (face diagonals of the octahedron) ───────
-    ("C12", ["X/2",  "Y/2"]),
-    ("C13", ["X/2",  "-Y/2"]),
-    ("C14", ["-X/2", "Y/2"]),
-    ("C15", ["-X/2", "-Y/2"]),
-
-    # ── remaining face-diagonal rotations ───────────────────────
-    ("C16", ["Y/2",  "X/2"]),
-    ("C17", ["Y/2",  "-X/2"]),
-    ("C18", ["-Y/2", "X/2"]),
-    ("C19", ["-Y/2", "-X/2"]),
-
-    # ── edge-midpoint rotations ──────────────────────────────────
-    ("C20", ["X/2",  "Y/2",  "X/2"]),
-    ("C21", ["X/2",  "Y/2", "-X/2"]),
-    ("C22", ["X/2",  "-Y/2", "X/2"]),
-    ("C23", ["-X/2", "Y/2",  "X/2"]),
-]
-
-# Build Clifford table: list of dicts with matrix + pulses
-CLIFFORD_TABLE = []
-for name, pulses in _RAW_CLIFFORDS:
-    U = seq_to_matrix(pulses)
-    CLIFFORD_TABLE.append({"name": name, "pulses": pulses, "matrix": U})
-
-# Quick sanity: we should have exactly 24 distinct elements
-def _matrix_distance(A, B):
+class SingleQubitRB:
     """
-    Distance between two SU(2) matrices up to global phase.
-    Returns minimum over the two possible phase ambiguities.
-    """
-    diff1 = np.linalg.norm(A - B, 'fro')
-    diff2 = np.linalg.norm(A + B, 'fro')   # global phase flip
-    return min(diff1, diff2)
+    Single-qubit Clifford-group RB / IRB sequence generator.
 
-def _verify_24():
-    n = len(CLIFFORD_TABLE)
-    assert n == 24, f"Expected 24 Cliffords, got {n}"
-    for i in range(n):
-        for j in range(i + 1, n):
-            d = _matrix_distance(CLIFFORD_TABLE[i]["matrix"],
-                                 CLIFFORD_TABLE[j]["matrix"])
-            assert d > 1e-6, (
-                f"Duplicate Cliffords: {CLIFFORD_TABLE[i]['name']} and "
-                f"{CLIFFORD_TABLE[j]['name']}  (dist={d:.2e})"
+    The Clifford group (24 elements) is parametrised as SU(2) matrices.
+    Each element is pre-decomposed into a short pulse sequence drawn from
+    the gate set {I, X, Y, X/2, Y/2, -X/2, -Y/2}.
+
+    Convention
+    ----------
+    pulse_sequence = [g1, g2, …, gN]  means  g1 is applied FIRST to |ψ⟩,
+    i.e.  U_total = U_gN · … · U_g2 · U_g1.
+
+    Allowed interleave gates
+    ------------------------
+    "X", "Y", "X/2", "Y/2"  (matches typical superconducting qubit gate sets)
+    """
+
+    # ── 1a. Primitive gate matrices ───────────────────────────────
+
+    @staticmethod
+    def _Rx(theta: float) -> np.ndarray:
+        c, s = np.cos(theta / 2), np.sin(theta / 2)
+        return np.array([[c, -1j * s], [-1j * s, c]], dtype=complex)
+
+    @staticmethod
+    def _Ry(theta: float) -> np.ndarray:
+        c, s = np.cos(theta / 2), np.sin(theta / 2)
+        return np.array([[c, -s], [s, c]], dtype=complex)
+
+    # ── 1b. Gate-name → matrix map ────────────────────────────────
+
+    @classmethod
+    def _build_gate_matrix(cls) -> dict:
+        return {
+            "I"    : np.eye(2, dtype=complex),
+            "X"    : cls._Rx(np.pi),
+            "Y"    : cls._Ry(np.pi),
+            "X/2"  : cls._Rx( np.pi / 2),
+            "Y/2"  : cls._Ry( np.pi / 2),
+            "-X/2" : cls._Rx(-np.pi / 2),
+            "-Y/2" : cls._Ry(-np.pi / 2),
+        }
+
+    # ── 1c. Allowed interleave gates ──────────────────────────────
+
+    ALLOWED_INTERLEAVE = {"X", "Y", "X/2", "Y/2"}
+
+    # ── 1d. 24 Clifford decompositions ───────────────────────────
+    #
+    #  Source / convention:
+    #    Barends et al. (2014)  /  Eppstein (2005)
+    #
+    #  Every Clifford is written as a product of primitives.
+    #  Reading the list left-to-right = gate applied first to |ψ⟩.
+    #
+    #  The 24 elements cover all 6 stabiliser states × 4 Pauli phases.
+    #  Grouped by the axis they map |0⟩ → {±X, ±Y, ±Z}.
+
+    _RAW_CLIFFORDS = [
+        # ── Identity / Paulis ──────────────────────────────────────────────
+        ("C0",  ["I"]),                       # I
+        ("C1",  ["X"]),                       # X
+        ("C2",  ["Y"]),                       # Y
+        ("C3",  ["Y", "X"]),                  # Z  (= X·Y up to phase; apply Y first)
+
+        # ── π/2 rotations ─────────────────────────────────────────────────
+        ("C4",  ["X/2"]),
+        ("C5",  ["-X/2"]),
+        ("C6",  ["Y/2"]),
+        ("C7",  ["-Y/2"]),
+
+        # ── Hadamard-like (swap axes) ──────────────────────────────────────
+        # H = Y/2 · X  (apply X first, then Y/2)
+        ("C8",  ["X",  "Y/2"]),               # H  (Z↔X)
+        ("C9",  ["X",  "-Y/2"]),              # H† (alt)
+        ("C10", ["Y",  "X/2"]),               # (Z↔Y variant)
+        ("C11", ["Y",  "-X/2"]),
+
+        # ── 2π/3 face-diagonal (S-like) ───────────────────────────────────
+        ("C12", ["X/2",  "Y/2"]),
+        ("C13", ["X/2",  "-Y/2"]),
+        ("C14", ["-X/2", "Y/2"]),
+        ("C15", ["-X/2", "-Y/2"]),
+
+        # ── remaining face-diagonal rotations ─────────────────────────────
+        ("C16", ["Y/2",  "X/2"]),
+        ("C17", ["-Y/2", "X/2"]),
+        ("C18", ["Y/2",  "-X/2"]),
+        ("C19", ["-Y/2", "-X/2"]),
+
+        # ── edge-midpoint rotations ────────────────────────────────────────
+        ("C20", ["X/2",  "Y/2",  "X/2"]),
+        ("C21", ["X/2",  "-Y/2", "X/2"]),
+        ("C22", ["-X/2", "Y/2",  "X/2"]),
+        ("C23", ["-X/2", "-Y/2", "X/2"]),
+    ]
+
+    # ─────────────────────────────────────────────────────────────
+    def __init__(self) -> None:
+        self._gate_matrix   = self._build_gate_matrix()
+        self._clifford_table= self._build_clifford_table()
+        self._inverse_table = self._build_inverse_table()   # pre-computed
+        self._verify_group_closure()                         # sanity check
+
+    # ── 2. Build Clifford table ───────────────────────────────────
+
+    def _seq_to_matrix(self, pulses: List[str]) -> np.ndarray:
+        """
+        pulses = [g1, g2, …]  →  U = U_gN · … · U_g1
+        (first gate in list applied first to state)
+        """
+        U = np.eye(2, dtype=complex)
+        for g in pulses:
+            U = self._gate_matrix[g] @ U
+        return U
+
+    def _build_clifford_table(self) -> List[dict]:
+        table = []
+        for name, pulses in self._RAW_CLIFFORDS:
+            U = self._seq_to_matrix(pulses)
+            table.append({"name": name, "pulses": pulses, "matrix": U})
+        self._verify_24_distinct(table)
+        return table
+
+    # ── 3. Verification helpers ───────────────────────────────────
+
+    @staticmethod
+    def _matrix_distance(A: np.ndarray, B: np.ndarray) -> float:
+        """
+        Distance between two U(2) matrices up to global phase.
+        Checks both +phase and −phase (covers SU(2) ↔ U(2) ambiguity).
+        """
+        return min(np.linalg.norm(A - B, 'fro'),
+                   np.linalg.norm(A + B, 'fro'))
+
+    def _verify_24_distinct(self, table: List[dict]) -> None:
+        assert len(table) == 24, f"Expected 24 Cliffords, got {len(table)}"
+        for i in range(24):
+            for j in range(i + 1, 24):
+                d = self._matrix_distance(table[i]["matrix"], table[j]["matrix"])
+                assert d > 1e-6, (
+                    f"Duplicate Cliffords: {table[i]['name']} and "
+                    f"{table[j]['name']}  (dist={d:.2e})\n"
+                    f"Check _RAW_CLIFFORDS decompositions."
+                )
+
+    def _verify_group_closure(self) -> None:
+        """
+        Verify that the 24 elements are closed under multiplication,
+        i.e. they really form the single-qubit Clifford group.
+        This catches any wrong decomposition in _RAW_CLIFFORDS.
+        """
+        for i, ci in enumerate(self._clifford_table):
+            for j, cj in enumerate(self._clifford_table):
+                prod = ci["matrix"] @ cj["matrix"]
+                _, dist = self._find_closest_clifford(prod)
+                assert dist < 1e-6, (
+                    f"Group closure FAILED: C{i} · C{j} not in Clifford group "
+                    f"(dist={dist:.2e}).\n"
+                    f"One or more entries in _RAW_CLIFFORDS is wrong."
+                )
+
+    # ── 4. Inverse lookup table (pre-computed, O(1) access) ───────
+
+    def _build_inverse_table(self) -> dict:
+        """
+        CLIFFORD_INVERSE[i] = j  such that  C_j · C_i ≈ I  (up to global phase).
+        Pre-computed once at construction; used by all sequence generators.
+        """
+        inv = {}
+        I2  = np.eye(2, dtype=complex)
+        for i, ci in enumerate(self._clifford_table):
+            for j, cj in enumerate(self._clifford_table):
+                if self._matrix_distance(cj["matrix"] @ ci["matrix"], I2) < 1e-6:
+                    inv[i] = j
+                    break
+            assert i in inv, (
+                f"Could not find inverse for Clifford C{i} — "
+                "group may be incomplete."
+            )
+        assert len(inv) == 24
+        return inv
+
+    # ── 5. Closest-Clifford lookup ────────────────────────────────
+
+    def _find_closest_clifford(self, U: np.ndarray):
+        """Return (index, distance) of the nearest Clifford to U."""
+        best_idx, best_dist = 0, np.inf
+        for idx, cliff in enumerate(self._clifford_table):
+            d = self._matrix_distance(U, cliff["matrix"])
+            if d < best_dist:
+                best_dist = d
+                best_idx  = idx
+        return best_idx, best_dist
+
+    # ── 6. SU(2) normalisation ────────────────────────────────────
+
+    @staticmethod
+    def _normalize_su2(U: np.ndarray) -> np.ndarray:
+        """
+        Project U onto SU(2) by removing the global phase so that det = +1.
+
+        Uses  U / sqrt(det U).  Because det(U) for a unitary is e^{iφ},
+        sqrt gives e^{iφ/2}, which is well-defined on the principal branch.
+        The ±1 phase ambiguity that remains is handled by _matrix_distance.
+        """
+        det = np.linalg.det(U)
+        assert abs(abs(det) - 1.0) < 1e-8, (
+            f"Matrix is not unitary: |det| = {abs(det):.6f}"
+        )
+        return U / np.sqrt(det)
+
+    # ── 7. Standard RB sequence generator ────────────────────────
+
+    def _generate_rb_sequence_single(
+        self,
+        n_cliffords : int,
+        rng         : np.random.Generator,
+    ) -> RBSequence:
+        """
+        Generate one standard-RB sequence of length n_cliffords + 1.
+
+        Returns
+        -------
+        RBSequence  with pulse_sequence = [random_gates …, recovery_gate]
+        """
+        indices = rng.integers(0, 24, size=n_cliffords).tolist()
+
+        # Accumulate U = C_m · … · C_1
+        U_acc = np.eye(2, dtype=complex)
+        for idx in indices:
+            U_acc = self._clifford_table[idx]["matrix"] @ U_acc
+
+        # Recovery = (U_acc)^{-1}  via pre-computed inverse table
+        # First find which Clifford U_acc is, then look up its inverse.
+        acc_idx, dist = self._find_closest_clifford(U_acc)
+        assert dist < 1e-6, (
+            f"Accumulated unitary not in Clifford group (dist={dist:.2e}).\n"
+            "This should never happen — check _verify_group_closure output."
+        )
+        recovery_index = self._inverse_table[acc_idx]
+
+        # Build flat pulse list
+        pulses = []
+        for idx in indices:
+            pulses.extend(self._clifford_table[idx]["pulses"])
+        pulses.extend(self._clifford_table[recovery_index]["pulses"])
+
+        return RBSequence(
+            clifford_indices = indices,
+            recovery_index   = recovery_index,
+            pulse_sequence   = pulses,
+            U_accumulated    = U_acc,
+            U_recovery       = self._clifford_table[recovery_index]["matrix"],
+        )
+
+    # ── 8. Interleaved RB sequence generator ─────────────────────
+
+    def _generate_irb_sequence_single(
+        self,
+        n_cliffords    : int,
+        interleave_gate: str,
+        rng            : np.random.Generator,
+    ) -> RBSequence:
+        """
+        Generate one IRB sequence.
+
+        Sequence structure:
+            C_1 · G · C_2 · G · … · C_m · G · C_recovery
+
+        C_recovery inverts the entire accumulated product (G·C_m)·…·(G·C_1).
+
+        Parameters
+        ----------
+        interleave_gate : str — must be one of ALLOWED_INTERLEAVE
+        """
+        if interleave_gate not in self.ALLOWED_INTERLEAVE:
+            raise ValueError(
+                f"interleave_gate={interleave_gate!r} is not allowed.\n"
+                f"Choose from: {self.ALLOWED_INTERLEAVE}"
             )
 
-_verify_24()
+        U_G      = self._gate_matrix[interleave_gate]
+        G_pulses = [interleave_gate]
 
-# ─────────────────────────────────────────────
-# 3. Closest-Clifford lookup
-# ─────────────────────────────────────────────
+        indices = rng.integers(0, 24, size=n_cliffords).tolist()
 
-def find_closest_clifford(U):
-    """
-    Given an arbitrary U(2) matrix, return the index of the Clifford in
-    CLIFFORD_TABLE that is closest (up to global phase).
-    """
-    best_idx  = 0
-    best_dist = np.inf
-    for idx, cliff in enumerate(CLIFFORD_TABLE):
-        d = _matrix_distance(U, cliff["matrix"])
-        if d < best_dist:
-            best_dist = d
-            best_idx  = idx
-    return best_idx, best_dist
+        # Accumulate U = (G·C_m) · … · (G·C_1)
+        U_acc = np.eye(2, dtype=complex)
+        for idx in indices:
+            U_C   = self._clifford_table[idx]["matrix"]
+            U_acc = U_G @ U_C @ U_acc
 
-# ─────────────────────────────────────────────
-# 4. RB sequence generation
-# ─────────────────────────────────────────────
-
-def generate_rb_sequence(n_cliffords, seed=None):
-    """
-    Generate one RB sequence of length n_cliffords + 1 (the last gate is the
-    recovery / inverse Clifford).
-
-    Parameters
-    ----------
-    n_cliffords : int
-        Number of random Clifford gates (not counting the recovery gate).
-    seed : int or None
-        NumPy random seed for reproducibility.
-
-    Returns
-    -------
-    clifford_indices : list[int]
-        Indices into CLIFFORD_TABLE for the n_cliffords random gates.
-    recovery_index : int
-        Index into CLIFFORD_TABLE for the recovery gate.
-    pulse_sequence : list[str]
-        Flat list of primitive gate names for the full experiment
-        (random gates + recovery gate, in order).
-    U_accumulated : np.ndarray (2×2 complex)
-        Product of the n_cliffords random gates (before recovery).
-    U_recovery : np.ndarray (2×2 complex)
-        The recovery gate matrix.
-    """
-    rng = np.random.default_rng(seed)
-
-    # Draw n_cliffords random Clifford indices
-    clifford_indices = rng.integers(0, 24, size=n_cliffords).tolist()
-
-    # Accumulate U = C_{m} · … · C_{1}  (first gate applied first → right side)
-    U_acc = np.eye(2, dtype=complex)
-    for idx in clifford_indices:
-        U_acc = CLIFFORD_TABLE[idx]["matrix"] @ U_acc
-
-    # Recovery gate = U_acc†  (in SU(2) sense)
-    U_inv = U_acc.conj().T
-    # Make sure it's SU(2): fix determinant phase
-    det   = np.linalg.det(U_inv)
-    U_inv = U_inv / np.sqrt(det)
-
-    recovery_index, dist = find_closest_clifford(U_inv)
-    assert dist < 1e-6, (
-        f"Recovery Clifford not found — dist = {dist:.2e}. "
-        "Check that CLIFFORD_TABLE spans the full group."
-    )
-
-    # Build flat pulse sequence
-    pulse_sequence = []
-    for idx in clifford_indices:
-        pulse_sequence.extend(CLIFFORD_TABLE[idx]["pulses"])
-    pulse_sequence.extend(CLIFFORD_TABLE[recovery_index]["pulses"])
-
-    U_recovery = CLIFFORD_TABLE[recovery_index]["matrix"]
-
-    return clifford_indices, recovery_index, pulse_sequence, U_acc, U_recovery
-
-
-# ─────────────────────────────────────────────
-# 5. Verification helper
-# ─────────────────────────────────────────────
-
-def verify_sequence(clifford_indices, recovery_index, verbose=True):
-    """
-    Check that the full sequence (random + recovery) returns to identity.
-    Returns the residual Frobenius norm (should be < 1e-10).
-    """
-    U = np.eye(2, dtype=complex)
-    for idx in clifford_indices:
-        U = CLIFFORD_TABLE[idx]["matrix"] @ U
-    U = CLIFFORD_TABLE[recovery_index]["matrix"] @ U
-
-    # Up to global phase, should be identity
-    phase = U[0, 0] / abs(U[0, 0]) if abs(U[0, 0]) > 1e-10 else 1.0
-    residual = np.linalg.norm(U / phase - np.eye(2), 'fro')
-
-    if verbose:
-        print(f"  Full sequence matrix (normalised):\n{U / phase}")
-        print(f"  Residual from Identity: {residual:.2e}")
-
-    return residual
-
-
-# ─────────────────────────────────────────────
-# 6. Interleaved RB (IRB)
-# ─────────────────────────────────────────────
-
-# Built-in interleave targets: any named gate OR a custom SU(2) matrix
-# The interleave gate is inserted after every random Clifford:
-#   C_1 · G · C_2 · G · … · C_m · G · C_recovery
-# where C_recovery inverts the entire accumulated product.
-
-def _gate_to_matrix(gate):
-    """
-    Accept either:
-      - str  : key in GATE_MATRIX  (e.g. "X", "Y/2")
-      - list : pulse sequence      (e.g. ["X/2", "Y/2"])
-      - ndarray : raw 2×2 SU(2) matrix
-    Returns a 2×2 complex numpy array.
-    """
-    if isinstance(gate, np.ndarray):
-        assert gate.shape == (2, 2), "Custom gate must be 2×2"
-        return gate.astype(complex)
-    if isinstance(gate, str):
-        assert gate in GATE_MATRIX, f"Unknown gate name: {gate!r}"
-        return GATE_MATRIX[gate]
-    if isinstance(gate, (list, tuple)):
-        return seq_to_matrix(gate)
-    raise TypeError(f"gate must be str / list / ndarray, got {type(gate)}")
-
-
-def _gate_to_pulses(gate):
-    """Return the pulse list representation of gate (for flat sequence output)."""
-    if isinstance(gate, np.ndarray):
-        # Try to match to a known Clifford; if not possible return placeholder
-        idx, dist = find_closest_clifford(gate)
-        if dist < 1e-6:
-            return list(CLIFFORD_TABLE[idx]["pulses"])
-        raise ValueError(
-            "Custom matrix gate does not match any Clifford — "
-            "provide a pulse list instead."
+        # Find recovery via inverse lookup
+        # U_acc may not be in the Clifford group by itself (G is not necessarily
+        # a Clifford), but (G·C) is always a Clifford if G ∈ gate set that
+        # generates Clifford group. We still use find_closest_clifford here.
+        U_inv = self._normalize_su2(U_acc.conj().T)
+        recovery_index, dist = self._find_closest_clifford(U_inv)
+        assert dist < 1e-6, (
+            f"IRB recovery Clifford not found (dist={dist:.2e}).\n"
+            "U_acc may not lie in the Clifford group for this interleave gate."
         )
-    if isinstance(gate, str):
-        return [gate]
-    if isinstance(gate, (list, tuple)):
-        return list(gate)
-    raise TypeError(f"gate must be str / list / ndarray, got {type(gate)}")
+
+        # Build flat pulse list: C_i pulses → G pulses → … → recovery pulses
+        pulses = []
+        for idx in indices:
+            pulses.extend(self._clifford_table[idx]["pulses"])
+            pulses.extend(G_pulses)
+        pulses.extend(self._clifford_table[recovery_index]["pulses"])
+
+        return RBSequence(
+            clifford_indices = indices,
+            recovery_index   = recovery_index,
+            pulse_sequence   = pulses,
+            U_accumulated    = U_acc,
+            U_recovery       = self._clifford_table[recovery_index]["matrix"],
+        )
+
+    # ── 9. Public API ─────────────────────────────────────────────
+
+    def generate_single_qb_rb(
+        self,
+        n_cliffords    : int,
+        n_samples      : int,
+        interleave_gate: Optional[str] = None,
+        seed           : Optional[int] = None,
+    ) -> List[RBSequence]:
+        """
+        Generate n_samples independent RB (or IRB) sequences.
+
+        Parameters
+        ----------
+        n_cliffords : int
+            Number of random Clifford gates per sequence (NOT counting recovery).
+        n_samples : int
+            Number of independent random sequences to generate.
+        interleave_gate : str or None
+            If None → standard RB.
+            Otherwise → IRB with this gate interleaved after each Clifford.
+            Allowed values: "X", "Y", "X/2", "Y/2".
+        seed : int or None
+            Master seed for reproducibility.  Each of the n_samples sequences
+            uses a child seed derived from this master, so results are
+            fully reproducible regardless of n_samples.
+
+        Returns
+        -------
+        List[RBSequence]
+            Length = n_samples.  Each RBSequence contains:
+              .clifford_indices  — list[int], length n_cliffords
+              .recovery_index    — int
+              .pulse_sequence    — list[str], full flat gate list
+                                   (random gates [+ interleave] + recovery)
+              .U_accumulated     — 2×2 complex ndarray
+              .U_recovery        — 2×2 complex ndarray
+
+        Notes
+        -----
+        pulse_sequence convention:
+            Standard RB  : [C1_pulses, C2_pulses, …, Cm_pulses, recovery_pulses]
+            IRB          : [C1_pulses, G_pulses, C2_pulses, G_pulses, …,
+                            Cm_pulses, G_pulses, recovery_pulses]
+        """
+        rng = np.random.default_rng(seed)
+
+        sequences = []
+        for _ in range(n_samples):
+            child_seed = int(rng.integers(0, 2**31))
+            child_rng  = np.random.default_rng(child_seed)
+
+            if interleave_gate is None:
+                seq = self._generate_rb_sequence_single(n_cliffords, child_rng)
+            else:
+                seq = self._generate_irb_sequence_single(
+                    n_cliffords, interleave_gate, child_rng
+                )
+            sequences.append(seq)
+
+        return sequences
+
+    # ── 10. Sequence verification ─────────────────────────────────
+
+    def verify_sequence(
+        self,
+        seq     : RBSequence,
+        verbose : bool = True,
+    ) -> float:
+        """
+        Verify that the full sequence (random + recovery) returns to identity.
+
+        Returns residual Frobenius norm (should be < 1e-10 for correct sequences).
+        """
+        U = np.eye(2, dtype=complex)
+        for idx in seq.clifford_indices:
+            U = self._clifford_table[idx]["matrix"] @ U
+        U = self._clifford_table[seq.recovery_index]["matrix"] @ U
+
+        phase    = U[0, 0] / abs(U[0, 0]) if abs(U[0, 0]) > 1e-10 else 1.0
+        residual = np.linalg.norm(U / phase - np.eye(2), 'fro')
+
+        if verbose:
+            print(f"  Full sequence matrix (phase-normalised):\n{np.round(U / phase, 6)}")
+            print(f"  Residual from Identity: {residual:.2e}")
+
+        return residual
+
+    def verify_irb_sequence(
+        self,
+        seq             : RBSequence,
+        interleave_gate : str,
+        verbose         : bool = True,
+    ) -> float:
+        """
+        Verify that the full IRB sequence returns to identity.
+
+        Returns residual Frobenius norm.
+        """
+        if interleave_gate not in self.ALLOWED_INTERLEAVE:
+            raise ValueError(f"interleave_gate must be one of {self.ALLOWED_INTERLEAVE}")
+
+        U_G = self._gate_matrix[interleave_gate]
+
+        U = np.eye(2, dtype=complex)
+        for idx in seq.clifford_indices:
+            U = U_G @ self._clifford_table[idx]["matrix"] @ U
+        U = self._clifford_table[seq.recovery_index]["matrix"] @ U
+
+        phase    = U[0, 0] / abs(U[0, 0]) if abs(U[0, 0]) > 1e-10 else 1.0
+        residual = np.linalg.norm(U / phase - np.eye(2), 'fro')
+
+        if verbose:
+            print(f"  Full IRB matrix (phase-normalised):\n{np.round(U / phase, 6)}")
+            print(f"  Residual from Identity: {residual:.2e}")
+
+        return residual
+
+    # ── 11. EPC / gate fidelity calculation ──────────────────────
+
+    @staticmethod
+    def epc_from_rb_irb(
+        p_ref : float,
+        p_irb : float,
+        d     : int = 2,
+    ) -> tuple:
+        """
+        Compute Error Per Clifford (EPC) of the interleaved gate.
+
+        Parameters
+        ----------
+        p_ref : float
+            Depolarizing parameter from standard-RB fit:  P(m) = A · p_ref^m + B
+        p_irb : float
+            Depolarizing parameter from IRB fit:          P(m) = A · p_irb^m + B
+        d : int
+            Hilbert-space dimension (d = 2 for single qubit).
+
+        Returns
+        -------
+        epc       : float   error per gate  =  (d-1)/d · (1 − p_irb/p_ref)
+        f_gate    : float   average gate fidelity  =  1 − epc
+        epc_bound : float   1-sigma upper bound (Magesan et al. 2012)
+
+        Notes
+        -----
+        DO NOT confuse p_ref with the error rate r_ref = (d-1)/d · (1 − p_ref).
+        The fitting model is  P(m) = A · p^m + B,  NOT  A · r^m + B.
+        """
+        epc       = (d - 1) / d * (1 - p_irb / p_ref)
+        f_gate    = 1.0 - epc
+        epc_bound = (d - 1) / d * (abs(p_ref - p_irb) / p_ref + (1 - p_ref))
+        return epc, f_gate, epc_bound
 
 
-def generate_irb_sequence(n_cliffords, interleave_gate, seed=None):
-    """
-    Generate one Interleaved RB sequence.
-
-    Structure:
-        C_1 · G · C_2 · G · … · C_m · G · C_recovery
-
-    where G is the interleaved gate and C_recovery satisfies:
-        C_recovery · (G · C_m) · … · (G · C_1) = I
-
-    Parameters
-    ----------
-    n_cliffords : int
-        Number of random Clifford gates (not counting recovery).
-    interleave_gate : str | list[str] | np.ndarray
-        The gate G to interleave. Accepts:
-          - str       : single primitive name, e.g. "X", "Y/2"
-          - list[str] : pulse sequence,        e.g. ["X/2", "Y/2"]
-          - ndarray   : raw 2×2 SU(2) matrix
-    seed : int or None
-
-    Returns
-    -------
-    clifford_indices : list[int]
-        Random Clifford indices (length n_cliffords).
-    recovery_index : int
-        Index of the recovery Clifford.
-    pulse_sequence : list[str]
-        Flat pulse list for the full IRB sequence including recovery.
-        Format: [C1_pulses, G_pulses, C2_pulses, G_pulses, …, recovery_pulses]
-    U_accumulated : np.ndarray (2×2)
-        Product (G·C_m)·…·(G·C_1) before recovery.
-    U_recovery : np.ndarray (2×2)
-        Recovery gate matrix.
-    """
-    rng = np.random.default_rng(seed)
-
-    U_G       = _gate_to_matrix(interleave_gate)
-    G_pulses  = _gate_to_pulses(interleave_gate)
-
-    # Normalise G to SU(2)
-    det = np.linalg.det(U_G)
-    U_G = U_G / np.sqrt(det)
-
-    clifford_indices = rng.integers(0, 24, size=n_cliffords).tolist()
-
-    # Accumulate U = (G·C_m)·…·(G·C_1)
-    U_acc = np.eye(2, dtype=complex)
-    for idx in clifford_indices:
-        U_C    = CLIFFORD_TABLE[idx]["matrix"]
-        U_acc  = U_G @ U_C @ U_acc   # G applied after each C
-
-    # Recovery: inverts U_acc
-    U_inv = U_acc.conj().T
-    det   = np.linalg.det(U_inv)
-    U_inv = U_inv / np.sqrt(det)
-
-    recovery_index, dist = find_closest_clifford(U_inv)
-    assert dist < 1e-6, (
-        f"IRB recovery Clifford not found — dist={dist:.2e}."
-    )
-
-    # Build flat pulse sequence: C_i pulses then G pulses, then recovery
-    pulse_sequence = []
-    for idx in clifford_indices:
-        pulse_sequence.extend(CLIFFORD_TABLE[idx]["pulses"])
-        pulse_sequence.extend(G_pulses)
-    pulse_sequence.extend(CLIFFORD_TABLE[recovery_index]["pulses"])
-
-    U_recovery = CLIFFORD_TABLE[recovery_index]["matrix"]
-
-    return clifford_indices, recovery_index, pulse_sequence, U_acc, U_recovery
-
-
-def verify_irb_sequence(clifford_indices, recovery_index, interleave_gate,
-                         verbose=True):
-    """
-    Check IRB sequence returns to identity. Returns residual Frobenius norm.
-    """
-    U_G  = _gate_to_matrix(interleave_gate)
-    det  = np.linalg.det(U_G)
-    U_G  = U_G / np.sqrt(det)
-
-    U = np.eye(2, dtype=complex)
-    for idx in clifford_indices:
-        U = U_G @ CLIFFORD_TABLE[idx]["matrix"] @ U
-    U = CLIFFORD_TABLE[recovery_index]["matrix"] @ U
-
-    phase    = U[0, 0] / abs(U[0, 0]) if abs(U[0, 0]) > 1e-10 else 1.0
-    residual = np.linalg.norm(U / phase - np.eye(2), 'fro')
-
-    if verbose:
-        print(f"  Full IRB matrix (normalised):\n{U / phase}")
-        print(f"  Residual from Identity: {residual:.2e}")
-
-    return residual
-
-
-def epc_from_rb_irb(r_ref, r_irb, d=2):
-    """
-    Compute Error Per Clifford (EPC) of the interleaved gate.
-
-    Parameters
-    ----------
-    r_ref : float   decay rate from standard RB fit  (A·r_ref^m + B)
-    r_irb : float   decay rate from IRB fit
-    d     : int     Hilbert space dimension (2 for 1 qubit)
-
-    Returns
-    -------
-    epc       : float   error per gate
-    f_gate    : float   gate fidelity  = 1 - epc
-    epc_bound : float   upper bound from Magesan et al.
-    """
-    epc       = (d - 1) / d * (1 - r_irb / r_ref)
-    f_gate    = 1 - epc
-    epc_bound = (d - 1) / d * (abs(r_ref - r_irb) / r_ref + (1 - r_ref))
-    return epc, f_gate, epc_bound
-
-
-# ─────────────────────────────────────────────
-# 7. Demo
-# ─────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# Quick self-test
+# ══════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    np.set_printoptions(precision=4, suppress=True)
+    rb = SingleQubitRB()
+    print("Clifford group verified (24 distinct, group-closed).\n")
 
-    print("=" * 60)
-    print("  Single-qubit RB + IRB — Clifford sequence generator")
-    print("=" * 60)
+    # ── Standard RB ──────────────────────────────────────────────
+    print("=== Standard RB (m=10, n_samples=5) ===")
+    seqs = rb.generate_single_qb_rb(n_cliffords=10, n_samples=5, seed=42)
+    for i, s in enumerate(seqs):
+        res = rb.verify_sequence(s, verbose=False)
+        print(f"  Sample {i}: {len(s.pulse_sequence):3d} pulses | "
+              f"residual = {res:.2e} | "
+              f"pulses = {s.pulse_sequence}")
 
-    # ── Example 1: standard RB short sequence ───────────────────
-    N = 8
-    seed = 2025
-    c_idx, r_idx, pulses, U_acc, U_rec = generate_rb_sequence(N, seed=seed)
+    print()
 
-    print(f"\n[1] Standard RB  n_cliffords={N}  seed={seed}")
-    for i, idx in enumerate(c_idx):
-        c = CLIFFORD_TABLE[idx]
-        print(f"    Gate {i+1:2d}: {c['name']:4s}  {c['pulses']}")
-    print(f"    Recovery: {CLIFFORD_TABLE[r_idx]['name']:4s}  "
-          f"{CLIFFORD_TABLE[r_idx]['pulses']}")
-    print(f"    Flat pulses ({len(pulses)}): {pulses}")
-    res = verify_sequence(c_idx, r_idx)
-    print(f"    → {'PASS ✓' if res < 1e-8 else 'FAIL ✗'}")
+    # ── IRB (interleave X) ────────────────────────────────────────
+    print("=== IRB  (m=5, n_samples=3, gate='X') ===")
+    iseqs = rb.generate_single_qb_rb(
+        n_cliffords=5, n_samples=3, interleave_gate="X", seed=0
+    )
+    for i, s in enumerate(iseqs):
+        res = rb.verify_irb_sequence(s, interleave_gate="X", verbose=False)
+        print(f"  Sample {i}: {len(s.pulse_sequence):3d} pulses | "
+              f"residual = {res:.2e} | "
+              f"pulses = {s.pulse_sequence}")
 
-    # ── Example 2: IRB — interleave X gate ──────────────────────
-    print(f"\n[2] IRB  interleave_gate='X'  n_cliffords={N}  seed={seed}")
-    c_idx, r_idx, pulses, U_acc, _ = generate_irb_sequence(
-        N, interleave_gate="X", seed=seed)
+    print()
 
-    for i, idx in enumerate(c_idx):
-        c = CLIFFORD_TABLE[idx]
-        print(f"    Gate {i+1:2d}: {c['name']:4s}  {c['pulses']}  →  X")
-    print(f"    Recovery: {CLIFFORD_TABLE[r_idx]['name']:4s}  "
-          f"{CLIFFORD_TABLE[r_idx]['pulses']}")
-    print(f"    Flat pulses ({len(pulses)}): {pulses}")
-    res = verify_irb_sequence(c_idx, r_idx, "X")
-    print(f"    → {'PASS ✓' if res < 1e-8 else 'FAIL ✗'}")
+    # ── IRB allowed gates ─────────────────────────────────────────
+    print("=== IRB gate set check ===")
+    for g in ["X", "Y", "X/2", "Y/2"]:
+        s = rb.generate_single_qb_rb(8, 1, interleave_gate=g, seed=7)[0]
+        res = rb.verify_irb_sequence(s, g, verbose=False)
+        print(f"  gate={g!r:5s}  residual={res:.2e}  {'✓' if res < 1e-9 else '✗ FAIL'}")
 
-    # ── Example 3: IRB — interleave X/2 (pulse list form) ───────
-    print(f"\n[3] IRB  interleave_gate='X/2'  n_cliffords={N}  seed={seed}")
-    c_idx, r_idx, pulses, _, _ = generate_irb_sequence(
-        N, interleave_gate="X/2", seed=seed)
-    print(f"    Flat pulses ({len(pulses)}): {pulses}")
-    res = verify_irb_sequence(c_idx, r_idx, "X/2")
-    print(f"    → {'PASS ✓' if res < 1e-8 else 'FAIL ✗'}")
+    print()
 
-    # ── Example 4: IRB — interleave custom pulse list ────────────
-    # e.g. your real X gate might be ["X/2", "X/2"] due to hardware decomp
-    print(f"\n[4] IRB  interleave_gate=['X/2','X/2']  (custom pulse list)")
-    c_idx, r_idx, pulses, _, _ = generate_irb_sequence(
-        N, interleave_gate=["X/2", "X/2"], seed=seed)
-    res = verify_irb_sequence(c_idx, r_idx, ["X/2", "X/2"])
-    print(f"    Flat pulses ({len(pulses)}): {pulses}")
-    print(f"    → {'PASS ✓' if res < 1e-8 else 'FAIL ✗'}")
-
-    # ── Example 5: stress test both RB and IRB ───────────────────
-    print("\n[5] Stress test — 300 RB + 300 IRB, lengths 1–40")
-    gates_to_test = ["X", "Y", "X/2", "Y/2", "-X/2", "-Y/2"]
-    rng = np.random.default_rng(42)
-    fail_rb = fail_irb = 0
-
-    for _ in range(300):
-        n  = int(rng.integers(1, 41))
-        sd = int(rng.integers(0, 2**31))
-
-        c_idx, r_idx, _, _, _ = generate_rb_sequence(n, seed=sd)
-        if verify_sequence(c_idx, r_idx, verbose=False) > 1e-8:
-            fail_rb += 1
-
-        ig = gates_to_test[int(rng.integers(0, len(gates_to_test)))]
-        c_idx, r_idx, _, _, _ = generate_irb_sequence(n, ig, seed=sd)
-        if verify_irb_sequence(c_idx, r_idx, ig, verbose=False) > 1e-8:
-            fail_irb += 1
-
-    print(f"    RB  failures: {fail_rb}/300  "
-          f"{'ALL PASS ✓' if fail_rb==0 else 'FAIL ✗'}")
-    print(f"    IRB failures: {fail_irb}/300  "
-          f"{'ALL PASS ✓' if fail_irb==0 else 'FAIL ✗'}")
-
-    # ── Example 6: EPC formula demo (simulated decay rates) ─────
-    print("\n[6] EPC formula demo (simulated r_ref / r_irb)")
-    r_ref  = 0.98    # typical reference RB decay per Clifford
-    r_irb  = 0.975   # IRB decay with gate G interleaved
-    epc, f_gate, bound = epc_from_rb_irb(r_ref, r_irb)
-    print(f"    r_ref   = {r_ref}")
-    print(f"    r_irb   = {r_irb}")
-    print(f"    EPC     = {epc:.5f}   (error per gate)")
-    print(f"    F_gate  = {f_gate:.5f}  (gate fidelity)")
-    print(f"    bound   = {bound:.5f}  (Magesan upper bound)")
-
-    # ── Example 7: typical IRB experiment layout ─────────────────
-    print("\n[7] Typical IRB experiment structure")
-    print("    interleave_gate = 'X'")
-    lengths = [1, 2, 4, 8, 16, 32]
-    n_seeds = 2
-    for L in lengths:
-        for s in range(n_seeds):
-            # --- reference RB ---
-            c_idx, r_idx, pulses_ref, _, _ = generate_rb_sequence(L, seed=s)
-            res_ref = verify_sequence(c_idx, r_idx, verbose=False)
-            # --- IRB ---
-            c_idx, r_idx, pulses_irb, _, _ = generate_irb_sequence(
-                L, "X", seed=s)
-            res_irb = verify_irb_sequence(c_idx, r_idx, "X", verbose=False)
-            ok = "✓" if (res_ref < 1e-8 and res_irb < 1e-8) else "✗"
-            print(f"    L={L:3d} seed={s}  "
-                  f"ref_pulses={len(pulses_ref):3d}  "
-                  f"irb_pulses={len(pulses_irb):3d}  {ok}")
+    # ── EPC example ──────────────────────────────────────────────
+    print("=== EPC demo ===")
+    epc, f_gate, bound = SingleQubitRB.epc_from_rb_irb(p_ref=0.99, p_irb=0.98)
+    print(f"  p_ref=0.99, p_irb=0.98")
+    print(f"  EPC     = {epc:.4f}")
+    print(f"  F_gate  = {f_gate:.4f}")
+    print(f"  Bound   = {bound:.4f}")

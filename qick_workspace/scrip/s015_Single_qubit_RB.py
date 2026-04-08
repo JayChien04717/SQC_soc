@@ -132,26 +132,6 @@ clifford_1q["I"] = identity
 
 
 # Read pulse as a matrix product acting on state (meaning apply pulses in reverse order of the tuple)
-# two_step_pulses = [
-#     ("X", "Z/2"),
-#     ("X/2", "Z/2"),
-#     ("-X/2", "Z/2"),
-#     ("Y", "Z/2"),
-#     ("Y/2", "Z/2"),
-#     ("-Y/2", "Z/2"),
-#     ("X", "Z"),
-#     ("X/2", "Z"),
-#     ("-X/2", "Z"),
-#     ("Y", "Z"),
-#     ("Y/2", "Z"),
-#     ("-Y/2", "Z"),
-#     ("X", "-Z/2"),
-#     ("X/2", "-Z/2"),
-#     ("-X/2", "-Z/2"),
-#     ("Y", "-Z/2"),
-#     ("Y/2", "-Z/2"),
-#     ("-Y/2", "-Z/2"),
-# ]
 
 step_pulses = [
     ("Y/2", "X"),

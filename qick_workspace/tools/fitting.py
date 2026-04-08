@@ -257,7 +257,8 @@ def _find_best_fit_with_r2(
     fitfunc: Callable,
 ) -> int:
     """
-    Find the best fit using R² values and normalized parameter errors.
+    Find the best fit using R² values to maximize SNR.
+    If multiple fits are valid, the one with the highest R² is selected.
 
     Args:
         data: Dictionary containing fit data
@@ -278,21 +279,25 @@ def _find_best_fit_with_r2(
     for i, (fit, y) in enumerate(zip(fits[: len(check_measures)], ydata)):
         residual_sum_sq = np.sum((fitfunc(xdata, *fit) - y) ** 2)
         total_sum_sq = np.sum((np.mean(y) - y) ** 2)
-        r2 = 1 - residual_sum_sq / total_sum_sq
+        
+        if total_sum_sq == 0:
+            r2 = -np.inf
+        else:
+            r2 = 1 - residual_sum_sq / total_sum_sq
 
-        # Set R² to infinity if any parameter has infinite error
-        if np.any(np.diag(fit_errors[i]) == np.inf):
-            r2 = np.inf
-        if np.any(np.isnan(fits)):
-            r2 = np.inf
+        # Invalidate fits with infinite errors or NaNs
+        if np.any(np.diag(fit_errors[i]) == np.inf) or np.any(np.isnan(fits[i])):
+            r2 = -np.inf
 
         r2_values.append(r2)
 
-    # Calculate normalized parameter errors
-    norm_errors = _calculate_normalized_errors(fits, fit_errors)
+    best_idx = np.argmax(r2_values)
 
-    # Return index of fit with lowest normalized error
-    return np.argmin(norm_errors)
+    # If all fits failed (all R² are -inf), fallback to normalized errors
+    if r2_values[best_idx] == -np.inf:
+        return _find_best_fit_simple(fits, fit_errors)
+
+    return int(best_idx)
 
 
 def _find_best_fit_simple(fits: List[Any], fit_errors: List[np.ndarray]) -> int:
