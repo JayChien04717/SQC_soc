@@ -85,8 +85,14 @@ def _fit_gmm(I_projs, xlims, n_init=5):
     n_states = len(I_projs)
     all_I = np.concatenate(I_projs).reshape(-1, 1)
 
+    # "tied" forces all components to share one covariance (= equal sigma).
+    # Physical motivation: both g and e states see the same amplifier noise
+    # floor, so their intrinsic readout sigma should be equal.  "full" lets
+    # each component fit its own sigma, which causes the T1-decay-broadened
+    # tail of the |e⟩ distribution to inflate sigma_e and pull the threshold
+    # toward |g⟩, artificially degrading the |e⟩ assignment.
     gmm = GaussianMixture(
-        n_components=n_states, covariance_type="full",
+        n_components=n_states, covariance_type="tied",
         n_init=n_init, random_state=0,
     )
     gmm.fit(all_I)
@@ -96,7 +102,9 @@ def _fit_gmm(I_projs, xlims, n_init=5):
     inv_order = np.argsort(order)   # original component index → sorted label
 
     means   = gmm.means_.ravel()[order]
-    stds    = np.sqrt(gmm.covariances_[:, 0, 0][order])
+    # "tied": single shared covariance matrix → same std for all components
+    shared_std = float(np.sqrt(gmm.covariances_[0, 0]))
+    stds    = np.full(n_states, shared_std)
     weights = gmm.weights_[order]
 
     # ── Confusion matrix ───────────────────────────────────────────────────
