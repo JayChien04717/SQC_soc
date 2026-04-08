@@ -113,7 +113,7 @@ class RandomizedBenchmarking:
                     n_cliffords=depth,
                     n_samples=1,
                     interleave_gate=interleaved_gate,
-                    seed=child_seed
+                    seed=child_seed,
                 )
                 seq_obj = seq_objs[0]
                 raw_pulses = seq_obj.pulse_sequence

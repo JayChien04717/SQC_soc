@@ -162,8 +162,11 @@ class AutoRB:
             # 檢查字串 gate 名稱是否有效 (避免跑一半噴錯)
             if isinstance(gate, str):
                 from .RB_generator import SingleQubitRB
+
                 if gate not in SingleQubitRB.ALLOWED_INTERLEAVE:
-                    print(f"⚠️ 警告: Gate '{gate}' 未知或是未定義於 ALLOWED_INTERLEAVE，跳過此項。")
+                    print(
+                        f"⚠️ 警告: Gate '{gate}' 未知或是未定義於 ALLOWED_INTERLEAVE，跳過此項。"
+                    )
                     continue
 
             print(f"\n=== IRB  gate = {gate} ===")

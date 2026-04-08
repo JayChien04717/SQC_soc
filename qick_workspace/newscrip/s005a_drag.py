@@ -191,7 +191,7 @@ class DragCalibration(BaseExperiment):
         iters = self._sweep_vals_y
 
         # ── Sum every iteration row ───────────────────────────────────────────
-        sum_trace = np.sum(np.real(self.iqdata), axis=0)  # shape: (n_alpha,)
+        sum_trace = np.sum(np.abs(self.iqdata), axis=0)  # shape: (n_alpha,)
 
         # Peak: index of maximum in the summed trace
         idx_max = int(np.argmax(sum_trace))

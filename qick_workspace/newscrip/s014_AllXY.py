@@ -95,7 +95,7 @@ class AllXY:
         self.allxy_lst = np.array(allxy_lst)
 
     def plot(self):
-        amp = np.real(self.allxy_lst)
+        amp = np.abs(self.allxy_lst)
         if amp[0] < amp[-1]:
             ref = (
                 [np.min(amp)] * 5

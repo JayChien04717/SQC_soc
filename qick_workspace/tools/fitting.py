@@ -11,33 +11,283 @@ import scipy as sp
 import traceback
 from typing import Tuple, List, Optional, Callable, Dict, Any, Union
 
+import numpy as np
+import scipy as sp
+from typing import Tuple, List, Optional, Callable, Dict, Any
+
+
 # ====================================================== #
 # Utility Functions
 # ====================================================== #
 
 
 def get_r2(
-    xdata: np.ndarray, ydata: np.ndarray, fitfunc: Callable, fit_params: List[float]
+    xdata: np.ndarray,
+    ydata: np.ndarray,
+    fitfunc: Callable,
+    fit_params: List[float],
+) -> float:
+    ss_res = np.sum((fitfunc(xdata, *fit_params) - ydata) ** 2)
+    ss_tot = np.sum((ydata - np.mean(ydata)) ** 2)
+    return 1 - ss_res / ss_tot if ss_tot > 0 else -np.inf
+
+
+def fix_phase(p: List[float]) -> Tuple[float, float]:
+    if p[2] > 180:
+        p[2] -= 360
+    elif p[2] < -180:
+        p[2] += 360
+
+    if p[2] < 0:
+        pi_gain = (1 / 2 - p[2] / 180) / 2 / p[1]
+        pi2_gain = (0 - p[2] / 180) / 2 / p[1]
+    else:
+        pi_gain = (3 / 2 - p[2] / 180) / 2 / p[1]
+        pi2_gain = (1 - p[2] / 180) / 2 / p[1]
+    return pi_gain, pi2_gain
+
+
+def fourier_init(
+    xdata: np.ndarray,
+    ydata: np.ndarray,
+    debug: bool = False,
+) -> Tuple[float, float]:
+    ydata = ydata - np.mean(ydata)
+    fourier = np.fft.rfft(ydata)  # rfft: no redundant negative freqs
+    fft_freqs = np.fft.rfftfreq(len(ydata), d=xdata[1] - xdata[0])
+
+    # Skip DC bin (index 0)
+    mag = np.abs(fourier[1:])
+    phase = np.angle(fourier[1:])
+    freqs = fft_freqs[1:]
+
+    max_ind = np.argmax(mag)
+    max_freq = freqs[max_ind]
+    max_phase = phase[max_ind]
+
+    if debug:
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(2, 1, sharex=True, figsize=(4, 6))
+        ax[0].plot(freqs, mag, ".")
+        ax[0].set_ylabel("Amplitude")
+        ax[1].plot(freqs, phase * 180 / np.pi, ".")
+        ax[1].plot(max_freq, max_phase * 180 / np.pi, "ro")
+        ax[1].set_xlabel("Frequency (MHz)")
+        ax[1].set_ylabel("Phase (deg)")
+        print(f"Max freq={max_freq:.4f}  Max phase={max_phase:.4f} rad")
+        plt.tight_layout()
+        plt.show()
+
+    return max_freq, max_phase
+
+
+def validate_bounds(
+    fitparams: List[float],
+    bounds: Tuple[List[float], List[float]],
+) -> List[float]:
+    fitparams = list(fitparams)
+    for i, (param, lo, hi) in enumerate(zip(fitparams, bounds[0], bounds[1])):
+        if not (lo < param < hi):
+            fitparams[i] = (lo + hi) / 2
+            print(
+                f"fitparam[{i}]={param:.4g} out of bounds [{lo:.4g}, {hi:.4g}]"
+                f" → reset to {fitparams[i]:.4g}"
+            )
+    return fitparams
+
+
+def generic_fit(
+    fitfunc: Callable,
+    xdata: np.ndarray,
+    ydata: np.ndarray,
+    fitparams: List[float],
+    bounds: Optional[Tuple[List[float], List[float]]] = None,
+    error_message: str = "Warning: fit failed!",
+) -> Tuple[List[float], np.ndarray, List[float]]:
+    if bounds:
+        fitparams = validate_bounds(fitparams, bounds)
+
+    pCov = np.full((len(fitparams), len(fitparams)), np.inf)
+    pOpt = list(fitparams)
+
+    try:
+        kwargs = dict(p0=fitparams, method="trf", max_nfev=10_000)
+        if bounds:
+            kwargs["bounds"] = bounds
+        pOpt, pCov = sp.optimize.curve_fit(fitfunc, xdata, ydata, **kwargs)
+    except (RuntimeError, ValueError):
+        print(error_message)
+        pOpt = [np.nan] * len(fitparams)
+
+    return pOpt, pCov, fitparams
+
+
+# ====================================================== #
+# Data Selection Functions
+# ====================================================== #
+
+
+def _fit_snr(
+    xdata: np.ndarray,
+    ydata: np.ndarray,
+    fit: List[float],
+    fit_err: np.ndarray,
+    fitfunc: Callable,
 ) -> float:
     """
-    Calculate the R-squared value for a fit.
+    Score a fit by SNR = (peak-to-peak of fit curve) / (residual RMS).
 
-    Args:
-        xdata: X-axis data points
-        ydata: Y-axis data points
-        fitfunc: The fitting function
-        `fit_params`: Parameters for the fitting function
+    This is robust to large DC offsets — unlike R², which has a small
+    denominator (ss_tot) when the signal swing is tiny relative to the
+    offset, making it hypersensitive to noise.
 
-    Returns:
-        R-squared value of the fit
+    Returns -inf if the fit is invalid (NaN params or infinite covariance).
     """
-    # Residual sum of squares
-    ss_res = np.sum((fitfunc(xdata, *fit_params) - ydata) ** 2)
-    # Total sum of squares
-    ss_tot = np.sum((np.mean(ydata) - ydata) ** 2)
-    # R^2 value
-    r2 = 1 - ss_res / ss_tot
-    return r2
+    if np.any(np.isnan(fit)) or np.any(np.diag(fit_err) == np.inf):
+        return -np.inf
+
+    y_fit = fitfunc(xdata, *fit)
+    fit_amplitude = np.max(y_fit) - np.min(y_fit)
+    residual_rms = np.sqrt(np.mean((ydata - y_fit) ** 2))
+
+    if residual_rms == 0:
+        return np.inf
+    if fit_amplitude == 0:
+        return -np.inf  # flat fit — useless
+
+    return fit_amplitude / residual_rms
+
+
+def _calculate_normalized_errors(
+    fits: List[Any],
+    fit_errors: List[np.ndarray],
+) -> np.ndarray:
+    """
+    Fallback scorer: mean(σ_i / |p_i|) across parameters.
+    Lower = better.  Returns inf for invalid fits.
+    """
+    norm_errors = []
+    for fit, err_matrix in zip(fits, fit_errors):
+        param_errors = np.sqrt(np.abs(np.diag(err_matrix)))
+        param_values = np.abs(fit)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratios = np.where(param_values > 0, param_errors / param_values, np.inf)
+        norm_err = np.nanmean(ratios)
+        norm_errors.append(np.inf if np.isnan(norm_err) else norm_err)
+    return np.array(norm_errors)
+
+
+def _find_best_fit_with_snr(
+    data: Dict[str, Any],
+    fits: List[Any],
+    fit_errors: List[np.ndarray],
+    check_measures: Tuple[str, ...],
+    fitfunc: Callable,
+) -> int:
+    """
+    Select the best measurement channel by SNR of the fit.
+
+    SNR = (fit peak-to-peak) / (residual RMS) is insensitive to DC offset,
+    directly reflecting how well the oscillation stands above the noise.
+    Falls back to normalised-error ranking if every fit is invalid.
+    """
+    xdata = data["xpts"]
+    scores = [
+        _fit_snr(
+            xdata,
+            data[measure],
+            fits[i],
+            fit_errors[i],
+            fitfunc,
+        )
+        for i, measure in enumerate(check_measures)
+    ]
+
+    best_idx = int(np.argmax(scores))
+    if scores[best_idx] == -np.inf:
+        # All fits failed — fall back to covariance-based ranking
+        return _find_best_fit_simple(fits, fit_errors)
+
+    return best_idx
+
+
+def _find_best_fit_simple(
+    fits: List[Any],
+    fit_errors: List[np.ndarray],
+) -> int:
+    return int(np.argmin(_calculate_normalized_errors(fits, fit_errors)))
+
+
+def get_best_fit(
+    data: Dict[str, Any],
+    fitfunc: Optional[Callable] = None,
+    prefixes: List[str] = ["fit"],
+    check_measures: Tuple[str, ...] = ("amps", "avgi", "avgq"),
+    get_best_data_params: Tuple[str, ...] = (),
+    override: Optional[str] = None,
+) -> List[Any]:
+    """
+    Compare fits across measurement channels and return the best one.
+
+    Selection priority
+    ------------------
+    1. `override`  — use this channel unconditionally if given.
+    2. `fitfunc`   — SNR-based selection (fit amplitude / residual RMS).
+    3. fallback    — lowest normalised covariance error.
+
+    Parameters
+    ----------
+    data                 : experiment data dict; must contain keys like
+                           "{prefix}_{measure}", "{prefix}_err_{measure}",
+                           "xpts", and each measure name.
+    fitfunc              : fitted model f(x, *params); required for SNR scoring.
+    prefixes             : key prefixes in `data` (default ["fit"]).
+    check_measures       : channels to compare (default ("amps","avgi","avgq")).
+    get_best_data_params : extra keys to return for the winning channel.
+    override             : if set, skip scoring and use this channel directly.
+
+    Returns
+    -------
+    [best_fit, best_fit_err, *extra_params, best_measure_name]
+    """
+    # ── collect fits and covariance matrices ──────────────────────
+    fits, fit_errors = [], []
+    for measure in check_measures:
+        for prefix in prefixes:
+            fits.append(data[f"{prefix}_{measure}"])
+            fit_errors.append(data[f"{prefix}_err_{measure}"])
+
+    # Replace zero diagonal entries with inf (zero cov = degenerate fit)
+    for err_matrix in fit_errors:
+        diag = np.diag(err_matrix)
+        zero_mask = diag == 0
+        err_matrix[np.diag_indices_from(err_matrix)] = np.where(zero_mask, np.inf, diag)
+
+    # ── select best channel ────────────────────────────────────────
+    if override is not None and override in check_measures:
+        best_index = list(check_measures).index(override)
+    elif fitfunc is not None:
+        best_index = _find_best_fit_with_snr(
+            data, fits, fit_errors, check_measures, fitfunc
+        )
+    else:
+        best_index = _find_best_fit_simple(fits, fit_errors)
+
+    best_measure = check_measures[best_index % len(check_measures)]
+
+    # ── assemble return value ──────────────────────────────────────
+    result = [fits[best_index], fit_errors[best_index]]
+    for param in get_best_data_params:
+        result.append(data[f"{param}_{best_measure}"])
+    result.append(best_measure)
+
+    return result
+
+
+# ====================================================== #
+# Phase Correction and Initialization Functions
+# ====================================================== #
 
 
 def fix_phase(p: List[float]) -> float:
@@ -132,220 +382,6 @@ def validate_bounds(
                 f"Attempted to init fitparam {i} to {param}, which is out of bounds {bounds[0][i]} to {bounds[1][i]}. Instead init to {fitparams[i]}"
             )
     return fitparams
-
-
-def generic_fit(
-    fitfunc: Callable,
-    xdata: np.ndarray,
-    ydata: np.ndarray,
-    fitparams: List[float],
-    bounds: Optional[Tuple[List[float], List[float]]] = None,
-    error_message: str = "Warning: fit failed!",
-) -> Tuple[List[float], np.ndarray, List[float]]:
-    """
-    Generic fitting function that handles common fitting patterns.
-
-    Args:
-        fitfunc: The function to fit
-        xdata: X-axis data points
-        ydata: Y-axis data points
-        fitparams: Initial parameters for fitting
-        bounds: Optional bounds for parameters
-        error_message: Message to display if fitting fails
-
-    Returns:
-        Tuple of (optimized_parameters, covariance_matrix, initial_parameters)
-    """
-    if bounds:
-        fitparams = validate_bounds(fitparams, bounds)
-
-    pOpt = fitparams
-    pCov = np.full(shape=(len(fitparams), len(fitparams)), fill_value=np.inf)
-
-    try:
-        if bounds:
-            pOpt, pCov = sp.optimize.curve_fit(
-                fitfunc, xdata, ydata, p0=fitparams, bounds=bounds
-            )
-        else:
-            pOpt, pCov = sp.optimize.curve_fit(fitfunc, xdata, ydata, p0=fitparams)
-    except RuntimeError:
-        print(error_message)
-        pOpt = [np.nan] * len(pOpt)
-
-    return pOpt, pCov, fitparams
-
-
-# ====================================================== #
-# Data Selection Functions
-# ====================================================== #
-
-
-def get_best_fit(
-    data: Dict[str, Any],
-    fitfunc: Optional[Callable] = None,
-    prefixes: List[str] = ["fit"],
-    check_measures: Tuple[str,] = ("amps", "avgi", "avgq"),
-    get_best_data_params: Tuple[str,] = (),
-    override: Optional[str] = None,
-) -> List[Any]:
-    """
-    Compare fits between different measurements and select the best one.
-
-    Args:
-        data: Dictionary containing fit data
-        fitfunc: Optional function to use for R² calculation
-        prefixes: List of prefixes to check in data keys
-        check_measures: Tuple of measurement types to check
-        get_best_data_params: Additional parameters to retrieve for best measurement
-        override: Optional measurement to use regardless of fit quality
-
-    Returns:
-        List containing [best_fit, best_fit_err, *additional_params, best_measurement_type]
-    """
-    # Collect fit parameters and error matrices
-    fits = []
-    fit_errors = []
-
-    for measure in check_measures:
-        for prefix in prefixes:
-            fits.append(data[f"{prefix}_{measure}"])
-            fit_errors.append(data[f"{prefix}_err_{measure}"])
-
-    # Fix error matrices: replace zeros with infinity (indicating bad fit)
-    for error_matrix in fit_errors:
-        diagonal = np.diag(error_matrix)
-        zero_indices = np.where(diagonal == 0)[0]
-        for idx in zero_indices:
-            error_matrix[idx, idx] = np.inf
-
-    # Use override if specified
-    if override is not None and override in check_measures:
-        best_index = np.argwhere(np.array(check_measures) == override)[0][0]
-    else:
-        # Calculate fit quality metrics
-        if fitfunc is not None:
-            # Method 1: Use both R² and normalized parameter errors
-            best_index = _find_best_fit_with_r2(
-                data, fits, fit_errors, check_measures, fitfunc
-            )
-        else:
-            # Method 2: Use only normalized parameter errors
-            best_index = _find_best_fit_simple(fits, fit_errors)
-
-    # Get the best measurement type (accounting for prefixes)
-    best_measure = check_measures[best_index % len(check_measures)]
-
-    # Collect results
-    result = [fits[best_index], fit_errors[best_index]]
-
-    # Add any additional requested parameters
-    for param in get_best_data_params:
-        result.append(data[f"{param}_{best_measure}"])
-
-    # Add the measurement type
-    result.append(best_measure)
-
-    return result
-
-
-def _find_best_fit_with_r2(
-    data: Dict[str, Any],
-    fits: List[Any],
-    fit_errors: List[np.ndarray],
-    check_measures: Tuple[str,],
-    fitfunc: Callable,
-) -> int:
-    """
-    Find the best fit using R² values to maximize SNR.
-    If multiple fits are valid, the one with the highest R² is selected.
-
-    Args:
-        data: Dictionary containing fit data
-        fits: List of fit parameters
-        fit_errors: List of error matrices
-        check_measures: Tuple of measurement types
-        fitfunc: Function to use for R² calculation
-
-    Returns:
-        Index of the best fit
-    """
-    # Get x and y data for R² calculation
-    xdata = data["xpts"]
-    ydata = [data[measure] for measure in check_measures]
-
-    # Calculate R² values
-    r2_values = []
-    for i, (fit, y) in enumerate(zip(fits[: len(check_measures)], ydata)):
-        residual_sum_sq = np.sum((fitfunc(xdata, *fit) - y) ** 2)
-        total_sum_sq = np.sum((np.mean(y) - y) ** 2)
-        
-        if total_sum_sq == 0:
-            r2 = -np.inf
-        else:
-            r2 = 1 - residual_sum_sq / total_sum_sq
-
-        # Invalidate fits with infinite errors or NaNs
-        if np.any(np.diag(fit_errors[i]) == np.inf) or np.any(np.isnan(fits[i])):
-            r2 = -np.inf
-
-        r2_values.append(r2)
-
-    best_idx = np.argmax(r2_values)
-
-    # If all fits failed (all R² are -inf), fallback to normalized errors
-    if r2_values[best_idx] == -np.inf:
-        return _find_best_fit_simple(fits, fit_errors)
-
-    return int(best_idx)
-
-
-def _find_best_fit_simple(fits: List[Any], fit_errors: List[np.ndarray]) -> int:
-    """
-    Find the best fit using only normalized parameter errors.
-
-    Args:
-        fits: List of fit parameters
-        fit_errors: List of error matrices
-
-    Returns:
-        Index of the best fit
-    """
-    # Calculate normalized parameter errors
-    norm_errors = _calculate_normalized_errors(fits, fit_errors)
-
-    # Return index of fit with lowest normalized error
-    return np.argmin(norm_errors)
-
-
-def _calculate_normalized_errors(
-    fits: List[Any], fit_errors: List[np.ndarray]
-) -> np.ndarray:
-    """
-    Calculate normalized parameter errors for each fit.
-
-    Args:
-        fits: List of fit parameters
-        fit_errors: List of error matrices
-
-    Returns:
-        Array of normalized errors
-    """
-    norm_errors = []
-
-    for fit, error_matrix in zip(fits, fit_errors):
-        # Calculate average of sqrt(|error|/|parameter|)
-        param_errors = np.sqrt(np.abs(np.diag(error_matrix)))
-        param_values = np.abs(fit)
-        norm_error = np.mean(param_errors / param_values)
-
-        # Handle NaN errors
-        if np.isnan(norm_error):
-            norm_error = np.inf
-
-        norm_errors.append(norm_error)
-
-    return np.array(norm_errors)
 
 
 # ====================================================== #
