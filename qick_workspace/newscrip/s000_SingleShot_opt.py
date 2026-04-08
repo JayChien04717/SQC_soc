@@ -157,51 +157,77 @@ class SingleShot_ge_opt:
         }
 
     @staticmethod
-    def _lda_fidelity(I_g, Q_g, I_e, Q_e, cv=5):
+    def _perstate_gmm_fidelity(I_g, Q_g, I_e, Q_e, max_components=2):
         """
-        Estimate readout fidelity via cross-validated LDA.
+        Estimate readout fidelity using per-state BIC-selected GMMs.
 
-        Why LDA instead of unsupervised GMM:
-        - GMM is unsupervised — it does not know which shots are g vs e.
-          With overlapping clouds and few shots it overfits, giving
-          inflated in-sample fidelity that disagrees with the final result.
-        - LDA is a supervised Bayes-optimal linear classifier.  It uses the
-          known labels, so there is no label-ambiguity and no overfitting
-          from cluster assignment.
-        - Cross-validation removes in-sample bias: the score predicts how
-          well the classifier generalises, matching what the final single-
-          shot measurement will report.
+        Algorithm
+        ---------
+        1. Project 2D IQ onto the g→e axis (1D rotated I).
+        2. Fit |g⟩ and |e⟩ independently, each with 1 or 2 Gaussian
+           components selected by BIC.  Two components are chosen when the
+           distribution is genuinely bimodal (T1 decay during readout).
+        3. Classify each shot by argmax log-likelihood across the two
+           per-state models (Bayes-optimal rule under these models).
+        4. Fidelity = mean of the 2×2 confusion-matrix diagonal.
 
-        Parameters
-        ----------
-        cv : int
-            Number of cross-validation folds (default 5).
-            Increase to 10 for smoother estimates at the cost of speed.
+        Why this is consistent with the final single-shot display:
+        - singleshot_utils._fit_gmm uses the same per-state BIC GMM + Bayes
+          classification, so the optimizer score and the final confusion
+          matrix are computed by the same algorithm.
+        - No cross-validation is needed: supervised per-state fitting with
+          ~2000 shots per state has negligible in-sample bias for ≤2
+          components.  (The old LDA+CV was needed to correct the large
+          in-sample bias of unsupervised combined-GMM fitting.)
 
         Returns 0.0 if the fit fails or data is degenerate.
         """
-        from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-        from sklearn.model_selection import StratifiedKFold, cross_val_score
+        from sklearn.mixture import GaussianMixture
 
-        X_g = np.column_stack([I_g, Q_g])
-        X_e = np.column_stack([I_e, Q_e])
-        X   = np.vstack([X_g, X_e])
-        y   = np.array([0] * len(X_g) + [1] * len(X_e))
-
-        # Need at least cv samples per class
-        n_min = min(len(X_g), len(X_e))
-        if n_min < cv:
+        # ── 1. Project onto g→e axis ──────────────────────────────────────
+        mean_g = np.array([np.mean(I_g), np.mean(Q_g)])
+        mean_e = np.array([np.mean(I_e), np.mean(Q_e)])
+        vec    = mean_e - mean_g
+        denom  = float(np.dot(vec, vec))
+        if denom < 1e-12:
             return 0.0
 
-        try:
-            lda    = LinearDiscriminantAnalysis()
-            cv_obj = StratifiedKFold(n_splits=cv, shuffle=True, random_state=0)
-            # balanced_accuracy = mean(diag(confusion_matrix))
-            scores = cross_val_score(lda, X, y, cv=cv_obj,
-                                     scoring="balanced_accuracy")
-            return float(np.mean(scores))
-        except Exception:
+        norm = np.sqrt(denom)
+        proj_g = ((I_g - mean_g[0]) * vec[0] + (Q_g - mean_g[1]) * vec[1]) / norm
+        proj_e = ((I_e - mean_g[0]) * vec[0] + (Q_e - mean_g[1]) * vec[1]) / norm
+
+        # ── 2. BIC-selected per-state GMM ─────────────────────────────────
+        def fit_bic(X):
+            best_gmm, best_bic = None, np.inf
+            for k in range(1, max_components + 1):
+                try:
+                    g = GaussianMixture(
+                        n_components=k, covariance_type="full",
+                        n_init=3, random_state=0,
+                    )
+                    g.fit(X)
+                    b = g.bic(X)
+                    if b < best_bic:
+                        best_bic, best_gmm = b, g
+                except Exception:
+                    pass
+            return best_gmm
+
+        gmm_g = fit_bic(proj_g.reshape(-1, 1))
+        gmm_e = fit_bic(proj_e.reshape(-1, 1))
+        if gmm_g is None or gmm_e is None:
             return 0.0
+
+        # ── 3. Bayes classification ────────────────────────────────────────
+        def fidelity_one(proj, correct_gmm, wrong_gmm):
+            X = proj.reshape(-1, 1)
+            return float(np.mean(
+                correct_gmm.score_samples(X) > wrong_gmm.score_samples(X)
+            ))
+
+        acc_g = fidelity_one(proj_g, gmm_g, gmm_e)
+        acc_e = fidelity_one(proj_e, gmm_e, gmm_g)
+        return (acc_g + acc_e) / 2
 
     def analyze(self):
         try:
@@ -227,7 +253,7 @@ class SingleShot_ge_opt:
         I_e_data = self.data["Ie"]
         Q_e_data = self.data["Qe"]
 
-        for l_idx in tqdm(range(len_L), desc="Analyze LDA fidelity"):
+        for l_idx in tqdm(range(len_L), desc="Analyze per-state GMM fidelity"):
             for g_idx in range(len_G):
                 for f_idx in range(len_F):
                     I_g = I_g_data[l_idx, g_idx, f_idx]
@@ -235,7 +261,7 @@ class SingleShot_ge_opt:
                     I_e = I_e_data[l_idx, g_idx, f_idx]
                     Q_e = Q_e_data[l_idx, g_idx, f_idx]
 
-                    fid_Array[l_idx, g_idx, f_idx] = self._lda_fidelity(
+                    fid_Array[l_idx, g_idx, f_idx] = self._perstate_gmm_fidelity(
                         I_g, Q_g, I_e, Q_e
                     )
 

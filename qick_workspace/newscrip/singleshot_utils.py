@@ -53,80 +53,119 @@ def plot_hist(data, bins, ax=None, xlims=None, color=None, linestyle=None,
 
 # ── GMM core ──────────────────────────────────────────────────────────────────
 
-def _fit_gmm(I_projs, xlims, n_init=5):
+def _bic_gmm(X, max_components=2, n_init=5):
     """
-    Fit a Gaussian Mixture Model on the combined 1-D projections of all states
-    and derive the confusion matrix and classification thresholds.
+    Fit 1..max_components GMMs on 1-D data X and return the one with
+    lowest BIC (Bayesian Information Criterion).
+
+    BIC penalises model complexity, so it selects 2 components only when
+    the data is genuinely bimodal (e.g. T1-decay tail on |e⟩).
+    """
+    best_gmm, best_bic = None, np.inf
+    for k in range(1, max_components + 1):
+        try:
+            g = GaussianMixture(
+                n_components=k, covariance_type="full",
+                n_init=n_init, random_state=0,
+            )
+            g.fit(X)
+            b = g.bic(X)
+            if b < best_bic:
+                best_bic, best_gmm = b, g
+        except Exception:
+            pass
+    return best_gmm
+
+
+def _fit_gmm(I_projs, xlims, n_init=5, max_components=2):
+    """
+    Fit per-state GMMs with BIC-selected number of components (1 or 2),
+    then classify using a Bayes (max log-likelihood) rule.
+
+    Why per-state instead of combined:
+    - T1 decay during readout makes |e⟩ bimodal in I: one peak at the
+      true |e⟩ position, one near |g⟩ from decayed shots.
+    - A combined 2-component GMM on g+e shots cannot distinguish a
+      bimodal |e⟩ from two well-separated states — it picks arbitrary
+      boundaries and reports inflated fidelity.
+    - Fitting each state separately with BIC lets the algorithm
+      automatically use 2 Gaussians for a T1-broadened |e⟩ and 1 for a
+      clean |g⟩, then place the Bayes-optimal boundary between the
+      per-state likelihoods.
 
     Parameters
     ----------
     I_projs : list of ndarray
-        Rotated I-axis projections, one array per prepared state (g, e, [f, ...]).
+        Rotated I-axis projections, one array per prepared state.
     xlims : [float, float]
         Search window for threshold finding.
     n_init : int
-        Number of GMM random restarts.
+        GMM random restarts per candidate k.
+    max_components : int
+        Maximum number of Gaussian components per state (default 2).
 
     Returns
     -------
-    gmm : GaussianMixture
-        Fitted model.
-    order : ndarray
-        Indices that sort GMM components by ascending mean  (g → e → f → ...).
-    conf_matrix : ndarray, shape (n_states, n_states)
-        Fraction of state-i shots declared as state-j
-        (rows = prepared state, cols = declared state).
-    thresholds : list[float]
-        Decision boundaries between adjacent sorted components.
-    means : ndarray   – sorted component means
-    stds  : ndarray   – sorted component standard deviations
-    weights : ndarray – sorted component mixture weights
+    state_gmms  : list[GaussianMixture]  – one fitted GMM per state
+    state_order : ndarray                – state indices sorted by primary mean
+    conf_matrix : ndarray (n_states, n_states)
+    thresholds  : list[float]
+    primary_means : ndarray              – dominant component mean per state
+    primary_stds  : ndarray              – dominant component std  per state
+    primary_weights : ndarray            – dominant component weight per state
     """
     n_states = len(I_projs)
-    all_I = np.concatenate(I_projs).reshape(-1, 1)
 
-    # "tied" forces all components to share one covariance (= equal sigma).
-    # Physical motivation: both g and e states see the same amplifier noise
-    # floor, so their intrinsic readout sigma should be equal.  "full" lets
-    # each component fit its own sigma, which causes the T1-decay-broadened
-    # tail of the |e⟩ distribution to inflate sigma_e and pull the threshold
-    # toward |g⟩, artificially degrading the |e⟩ assignment.
-    gmm = GaussianMixture(
-        n_components=n_states, covariance_type="tied",
-        n_init=n_init, random_state=0,
-    )
-    gmm.fit(all_I)
+    # ── Fit each state independently ──────────────────────────────────────
+    state_gmms = []
+    for proj in I_projs:
+        gmm = _bic_gmm(proj.reshape(-1, 1), max_components, n_init)
+        state_gmms.append(gmm)
 
-    # Sort components left → right (ascending mean)
-    order     = np.argsort(gmm.means_.ravel())
-    inv_order = np.argsort(order)   # original component index → sorted label
+    # ── Primary component per state (highest-weight Gaussian) ─────────────
+    # Used for rotation-axis refinement and display.
+    primary_means   = np.zeros(n_states)
+    primary_stds    = np.zeros(n_states)
+    primary_weights = np.zeros(n_states)
+    for i, gmm in enumerate(state_gmms):
+        idx = int(np.argmax(gmm.weights_))
+        primary_means[i]   = float(gmm.means_[idx, 0])
+        primary_stds[i]    = float(np.sqrt(gmm.covariances_[idx, 0, 0]))
+        primary_weights[i] = float(gmm.weights_[idx])
 
-    means   = gmm.means_.ravel()[order]
-    # "tied": single shared covariance matrix → same std for all components
-    shared_std = float(np.sqrt(gmm.covariances_[0, 0]))
-    stds    = np.full(n_states, shared_std)
-    weights = gmm.weights_[order]
+    # Sort states by primary mean (left → right in histogram)
+    state_order = np.argsort(primary_means)
 
-    # ── Confusion matrix ───────────────────────────────────────────────────
-    # conf[i, j] = fraction of prepared-state-i shots assigned to sorted class j
+    # ── Bayes confusion matrix ─────────────────────────────────────────────
+    # For each shot, pick the state whose per-state GMM gives the highest
+    # log-likelihood.  This is the optimal classifier under these models.
+    x_dense = np.linspace(xlims[0], xlims[1], 2000).reshape(-1, 1)
+    log_liks_dense = np.array(
+        [gmm.score_samples(x_dense) for gmm in state_gmms]
+    )  # (n_states, 2000)
+
     conf_matrix = np.zeros((n_states, n_states))
-    for i, I_proj in enumerate(I_projs):
-        raw_preds    = gmm.predict(I_proj.reshape(-1, 1))
-        sorted_preds = inv_order[raw_preds]
+    for i, proj in enumerate(I_projs):
+        X = proj.reshape(-1, 1)
+        ll = np.array([gmm.score_samples(X) for gmm in state_gmms])  # (n_states, n_shots)
+        preds = np.argmax(ll, axis=0)                                  # (n_shots,)
         for j in range(n_states):
-            conf_matrix[i, j] = (sorted_preds == j).sum() / len(sorted_preds)
+            conf_matrix[i, j] = np.mean(preds == j)
 
-    # ── Thresholds: posterior crossings between adjacent sorted components ─
-    x_dense    = np.linspace(xlims[0], xlims[1], 2000)
-    posteriors = gmm.predict_proba(x_dense.reshape(-1, 1))  # (2000, n_components)
+    # ── Thresholds: Bayes log-likelihood crossings ─────────────────────────
     thresholds = []
     for k in range(n_states - 1):
-        diff  = posteriors[:, order[k]] - posteriors[:, order[k + 1]]
+        s1, s2 = state_order[k], state_order[k + 1]
+        diff  = log_liks_dense[s1] - log_liks_dense[s2]
         cross = np.where(np.diff(np.sign(diff)))[0]
-        t = float(x_dense[cross[0]]) if cross.size else float((means[k] + means[k + 1]) / 2)
+        if cross.size:
+            t = float(x_dense[cross[0]])
+        else:
+            t = float((primary_means[s1] + primary_means[s2]) / 2)
         thresholds.append(t)
 
-    return gmm, order, conf_matrix, thresholds, means, stds, weights
+    return (state_gmms, state_order, conf_matrix, thresholds,
+            primary_means, primary_stds, primary_weights)
 
 
 # ── Main analysis ─────────────────────────────────────────────────────────────
@@ -285,8 +324,8 @@ def general_hist(iqshots, state_labels, g_states, e_states, e_label="e",
         else:
             _, bins_dist = np.histogram(proj, bins=numbins, range=xlims)
 
-    # ── 5. GMM fitting & confusion matrix ─────────────────────────────────
-    gmm, order, conf_matrix, thresholds, gmm_means, gmm_stds, gmm_weights = \
+    # ── 5. Per-state GMM fitting & confusion matrix ───────────────────────
+    state_gmms, state_order, conf_matrix, thresholds, gmm_means, gmm_stds, gmm_weights = \
         _fit_gmm(I_projs, xlims)
 
     # Fidelity = mean of confusion-matrix diagonal (fraction, 0–1)
@@ -296,26 +335,33 @@ def general_hist(iqshots, state_labels, g_states, e_states, e_label="e",
     # Confusion matrix in percent
     conf_matrix_pct = conf_matrix * 100.0
 
-    # ── 6. GMM overlay on histogram ───────────────────────────────────────
+    # ── 6. Per-state GMM overlay on histogram ─────────────────────────────
     if plot:
         x_plot    = np.linspace(xlims[0], xlims[1], 500)
+        x_col     = x_plot.reshape(-1, 1)
         bin_width = bins_dist[1] - bins_dist[0]
-        n_total   = sum(len(p) for p in I_projs)
-        scale     = n_total * bin_width   # converts PDF → expected counts
 
-        # Individual GMM components (shaded + dashed)
-        for k in range(n_states):
-            comp_pdf = gmm_weights[k] * _norm.pdf(x_plot, gmm_means[k], gmm_stds[k])
-            c = default_colors[k % len(default_colors)]
-            axs[1, 0].fill_between(x_plot, 0, comp_pdf * scale,
-                                   alpha=0.20, color=c)
-            axs[1, 0].plot(x_plot, comp_pdf * scale,
-                           color=c, linewidth=1.1, linestyle="--")
+        for idx, gmm in enumerate(state_gmms):
+            n_shots   = len(I_projs[idx])
+            scale_s   = n_shots * bin_width          # per-state scale
+            state_pdf = np.exp(gmm.score_samples(x_col))
+            c = default_colors[idx % len(default_colors)]
 
-        # Total GMM mixture
-        total_pdf = np.exp(gmm.score_samples(x_plot.reshape(-1, 1)))
-        axs[1, 0].plot(x_plot, total_pdf * scale,
-                       color="black", linewidth=1.5, alpha=0.7, label="GMM total")
+            # Each Gaussian component of this state (dashed + light fill)
+            for comp_i in range(gmm.n_components):
+                w   = float(gmm.weights_[comp_i])
+                mu  = float(gmm.means_[comp_i, 0])
+                sig = float(np.sqrt(gmm.covariances_[comp_i, 0, 0]))
+                comp_pdf = w * _norm.pdf(x_plot, mu, sig)
+                axs[1, 0].fill_between(x_plot, 0, comp_pdf * scale_s,
+                                       alpha=0.15, color=c)
+                axs[1, 0].plot(x_plot, comp_pdf * scale_s,
+                               color=c, linewidth=0.9, linestyle="--")
+
+            # Full per-state mixture envelope
+            axs[1, 0].plot(x_plot, state_pdf * scale_s,
+                           color=c, linewidth=1.8, alpha=0.85,
+                           label=f"GMM {state_labels[idx]}")
 
         # Decision thresholds
         for th in thresholds:
@@ -364,7 +410,9 @@ def general_hist(iqshots, state_labels, g_states, e_states, e_label="e",
     if verbose:
         print(f"Rotation angle : {theta_rad * 180 / np.pi:.2f} deg")
         print(f"GMM Fidelity   : {100 * fid:.3f}%")
-        print(f"GMM means      : {[f'{m:.3f}' for m in gmm_means]}")
+        for idx, (lbl, gmm) in enumerate(zip(state_labels, state_gmms)):
+            print(f"  |{lbl}⟩  components={gmm.n_components}  "
+                  f"primary_mean={gmm_means[idx]:.3f}  primary_std={gmm_stds[idx]:.3f}")
         print(f"Thresholds     : {[f'{t:.3f}' for t in thresholds]}")
         print("Confusion Matrix (%):\n", np.round(conf_matrix_pct, 1))
 
