@@ -30,7 +30,7 @@ def plot_final(xpts, data: np.ndarray, x_label: str, fitfunc, simfunc, return_ax
         d[f"fit_{measure}"]     = popt
         d[f"fit_err_{measure}"] = pcov
 
-    fit_params, fit_err, best_measure = fitter.get_best_fit(d, fitfunc=None)
+    fit_params, fit_err, best_measure = fitter.get_best_fit(d, fitfunc=simfunc)
 
     fig = plt.figure(figsize=(12, 6))
     gs  = gridspec.GridSpec(2, 3, width_ratios=[1, 1, 2])
