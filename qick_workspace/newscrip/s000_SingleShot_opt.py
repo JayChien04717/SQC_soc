@@ -19,8 +19,10 @@ class SingleShotOptProgram(BaseProgram):
         self.setup_resonator(cfg)
         self.setup_qubit_gen(cfg, "ge")
         self.add_loop("shotloop", cfg["shots"])
-        # Setup the pi pulse for the excited state
         self.setup_qb_pulse(cfg, "ge", name="qb_pulse", gain_key="pi_gain_ge")
+        if cfg.get("shot_f", False):
+            self.setup_qubit_gen(cfg, "ef")
+            self.setup_qb_pulse(cfg, "ef", name="qb_ef_pulse", gain_key="pi_gain_ef")
 
     def _body(self, cfg):
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
@@ -36,6 +38,16 @@ class SingleShotOptProgram(BaseProgram):
         self.delay_auto(0.01, tag="wait")
         self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
         self.trigger(ros=[cfg["ro_ch"]], pins=[0], t=cfg["trig_time"])
+
+        # 3. Optional f-state readout (ge pi + ef pi → |f⟩)
+        if cfg.get("shot_f", False):
+            self.delay_auto(cfg["relax_delay"], tag="relax_wait2")
+            self.pulse(ch=cfg["qb_ch"], name="qb_pulse", t=0)
+            self.delay_auto(0.01, tag="wait1")
+            self.pulse(ch=cfg["qb_ch_ef"], name="qb_ef_pulse", t=0)
+            self.delay_auto(0.01)
+            self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
+            self.trigger(ros=[cfg["ro_ch"]], pins=[0], t=cfg["trig_time"])
 
 
 #####################
@@ -55,8 +67,10 @@ class SingleShot_ge_opt:
         self.soccfg = soccfg
         self.cfg = config
 
-    def run(self, SHOTS, sweep_para: dict):
+    def run(self, SHOTS, sweep_para: dict, shot_f=False):
         self.cfg["shots"] = SHOTS
+        self.cfg["shot_f"] = shot_f
+        self._shot_f = shot_f
 
         raw_length = sweep_para.get("length")
         self.length_sweep = (
@@ -86,6 +100,9 @@ class SingleShot_ge_opt:
         self.Q_g_array = np.full(final_shape, np.nan)
         self.I_e_array = np.full(final_shape, np.nan)
         self.Q_e_array = np.full(final_shape, np.nan)
+        if shot_f:
+            self.I_f_array = np.full(final_shape, np.nan)
+            self.Q_f_array = np.full(final_shape, np.nan)
 
         # --- TQDM Dynamic Setup ---
         is_l_sweep = len(self.length_sweep) > 1
@@ -138,7 +155,7 @@ class SingleShot_ge_opt:
                     )
                     iq_list = ssp.acquire(self.soc, rounds=1, progress=False)
 
-                    # Extract the two triggers from the single readout channel
+                    # Extract triggers from the single readout channel
                     I_g = iq_list[0][0, :, 0]
                     Q_g = iq_list[0][0, :, 1]
                     I_e = iq_list[0][1, :, 0]
@@ -149,12 +166,19 @@ class SingleShot_ge_opt:
                     self.I_e_array[l_idx, g_idx, f_idx, :] = I_e
                     self.Q_e_array[l_idx, g_idx, f_idx, :] = Q_e
 
+                    if shot_f:
+                        self.I_f_array[l_idx, g_idx, f_idx, :] = iq_list[0][2, :, 0]
+                        self.Q_f_array[l_idx, g_idx, f_idx, :] = iq_list[0][2, :, 1]
+
         self.data = {
             "Ig": self.I_g_array,
             "Qg": self.Q_g_array,
             "Ie": self.I_e_array,
             "Qe": self.Q_e_array,
         }
+        if shot_f:
+            self.data["If"] = self.I_f_array
+            self.data["Qf"] = self.Q_f_array
 
     @staticmethod
     def _auc_fidelity(I_g, Q_g, I_e, Q_e):
@@ -210,6 +234,38 @@ class SingleShot_ge_opt:
         except Exception:
             return 0.5
 
+    @staticmethod
+    def _auc_fidelity_gef(I_g, Q_g, I_e, Q_e, I_f, Q_f):
+        """
+        Average pairwise AUC for three-state (g/e/f) discrimination.
+        Computes AUC for (g vs e), (g vs f), (e vs f) and returns their mean.
+        """
+        from sklearn.metrics import roc_auc_score
+
+        pairs = [
+            (I_g, Q_g, I_e, Q_e),
+            (I_g, Q_g, I_f, Q_f),
+            (I_e, Q_e, I_f, Q_f),
+        ]
+        aucs = []
+        for I1, Q1, I2, Q2 in pairs:
+            mean1 = np.array([np.mean(I1), np.mean(Q1)])
+            mean2 = np.array([np.mean(I2), np.mean(Q2)])
+            vec   = mean2 - mean1
+            norm  = float(np.linalg.norm(vec))
+            if norm < 1e-12:
+                aucs.append(0.5)
+                continue
+            proj1 = ((I1 - mean1[0]) * vec[0] + (Q1 - mean1[1]) * vec[1]) / norm
+            proj2 = ((I2 - mean1[0]) * vec[0] + (Q2 - mean1[1]) * vec[1]) / norm
+            scores = np.concatenate([proj1, proj2])
+            labels = np.array([0] * len(proj1) + [1] * len(proj2))
+            try:
+                aucs.append(float(roc_auc_score(labels, scores)))
+            except Exception:
+                aucs.append(0.5)
+        return float(np.mean(aucs))
+
     def analyze(self):
         try:
             from scipy.interpolate import RegularGridInterpolator
@@ -229,12 +285,18 @@ class SingleShot_ge_opt:
 
         fid_Array = np.zeros((len_L, len_G, len_F))
 
+        shot_f = getattr(self, "_shot_f", False)
+        metric_label = "AUC fidelity (gef avg pairwise)" if shot_f else "AUC fidelity (ge)"
+
         I_g_data = self.data["Ig"]
         Q_g_data = self.data["Qg"]
         I_e_data = self.data["Ie"]
         Q_e_data = self.data["Qe"]
+        if shot_f:
+            I_f_data = self.data["If"]
+            Q_f_data = self.data["Qf"]
 
-        for l_idx in tqdm(range(len_L), desc="Analyze AUC fidelity"):
+        for l_idx in tqdm(range(len_L), desc=f"Analyze {metric_label}"):
             for g_idx in range(len_G):
                 for f_idx in range(len_F):
                     I_g = I_g_data[l_idx, g_idx, f_idx]
@@ -242,9 +304,16 @@ class SingleShot_ge_opt:
                     I_e = I_e_data[l_idx, g_idx, f_idx]
                     Q_e = Q_e_data[l_idx, g_idx, f_idx]
 
-                    fid_Array[l_idx, g_idx, f_idx] = self._auc_fidelity(
-                        I_g, Q_g, I_e, Q_e
-                    )
+                    if shot_f:
+                        fid_Array[l_idx, g_idx, f_idx] = self._auc_fidelity_gef(
+                            I_g, Q_g, I_e, Q_e,
+                            I_f_data[l_idx, g_idx, f_idx],
+                            Q_f_data[l_idx, g_idx, f_idx],
+                        )
+                    else:
+                        fid_Array[l_idx, g_idx, f_idx] = self._auc_fidelity(
+                            I_g, Q_g, I_e, Q_e
+                        )
 
         max_idx = np.unravel_index(np.argmax(fid_Array), fid_Array.shape)
         max_l_idx, max_g_idx, max_f_idx = max_idx

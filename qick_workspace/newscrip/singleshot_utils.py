@@ -411,8 +411,11 @@ def general_hist(iqshots, state_labels, g_states, e_states, e_label="e",
         print(f"Rotation angle : {theta_rad * 180 / np.pi:.2f} deg")
         print(f"GMM Fidelity   : {100 * fid:.3f}%")
         for idx, (lbl, gmm) in enumerate(zip(state_labels, state_gmms)):
+            sec_weight = 1.0 - float(gmm_weights[idx]) if gmm.n_components > 1 else 0.0
+            quality_flag = "  ⚠ secondary component large — possible state leakage" if sec_weight > 0.25 else ""
             print(f"  |{lbl}⟩  components={gmm.n_components}  "
-                  f"primary_mean={gmm_means[idx]:.3f}  primary_std={gmm_stds[idx]:.3f}")
+                  f"primary_mean={gmm_means[idx]:.3f}  primary_std={gmm_stds[idx]:.3f}  "
+                  f"secondary_weight={sec_weight:.3f}{quality_flag}")
         print(f"Thresholds     : {[f'{t:.3f}' for t in thresholds]}")
         print("Confusion Matrix (%):\n", np.round(conf_matrix_pct, 1))
 
