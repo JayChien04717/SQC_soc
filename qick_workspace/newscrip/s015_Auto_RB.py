@@ -172,9 +172,9 @@ class AutoRB:
         for gate in interleaved_gates:
             # 檢查字串 gate 名稱是否有效 (避免跑一半噴錯)
             if isinstance(gate, str):
-                from .RB_generator import SingleQubitRB
+                from .RB_generator import INTERLEAVE_GATES
 
-                if gate not in SingleQubitRB.ALLOWED_INTERLEAVE:
+                if gate not in INTERLEAVE_GATES:
                     print(
                         f"⚠️ 警告: Gate '{gate}' 未知或是未定義於 ALLOWED_INTERLEAVE，跳過此項。"
                     )
