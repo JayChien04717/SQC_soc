@@ -95,10 +95,15 @@ class RandomizedBenchmarking:
         seed=None,
         prefix="ge",
         iq_process="abs",
+        randomize_depth_order=False,
     ):
         """
         iq_process : "abs" | "real"
             Use "real" after readout optimization (best SNR on I axis).
+        randomize_depth_order : bool
+            If True, measure depths in a random order instead of ascending order.
+            Results are reordered back to ascending depth before fitting/plotting,
+            so time drift is spread evenly across all depth points.
         """
         self._iq_process = iq_process
         self.x = np.arange(1, max_circuit_depth, delta_clifford)
@@ -110,12 +115,18 @@ class RandomizedBenchmarking:
         desc = f"IRB ({interleaved_gate})" if is_irb else "Standard RB"
         parent_rng = np.random.default_rng(seed)
 
-        rb_result = []
-        for depth in tqdm(self.x, desc=desc):
+        # Build measurement order (shuffled or sorted)
+        depth_indices = np.arange(len(self.x))
+        if randomize_depth_order:
+            parent_rng.shuffle(depth_indices)
+            print(f"  Depth order: {self.x[depth_indices].tolist()}")
+
+        rb_result_unordered = [None] * len(self.x)
+        for idx in tqdm(depth_indices, desc=desc):
+            depth = self.x[idx]
             rblist = []
             for _ in tqdm(range(number_sample), desc="Samples", leave=False):
                 child_seed = int(parent_rng.integers(0, 2**31))
-                child_rng = np.random.default_rng(child_seed)
 
                 # 使用新版 SingleQubitRB 類別
                 seq_objs = self.rb_gen.generate_single_qb_rb(
@@ -139,9 +150,9 @@ class RandomizedBenchmarking:
                 iq_list = prog.acquire(self.soc, rounds=py_avg, progress=False)
                 rblist.append(iq_list[0][0].dot([1, 1j]))
 
-            rb_result.append(rblist)
+            rb_result_unordered[idx] = rblist
 
-        self.rb_result = rb_result
+        self.rb_result = rb_result_unordered
 
     def saveLabber(self, qb_idx, config_all=None, yoko_value=None, title=None):
         if self.x is None or self.rb_result is None:

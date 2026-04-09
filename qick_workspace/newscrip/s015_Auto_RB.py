@@ -129,6 +129,7 @@ class AutoRB:
         seed=None,
         prefix="ge",
         iq_process="abs",
+        randomize_depth_order=False,
     ):
         """
         iq_process : "abs" | "real"
@@ -149,7 +150,7 @@ class AutoRB:
 
         # ── 1. Standard RB (Reference) ────────────────────────────────────────
         print("\n=== Standard RB (Reference) ===")
-        rb_ref = RandomizedBenchmarking(self.soc, self.soccfg, self.cfg)
+        rb_ref = RandomizedBenchmarking(self.cfg)
         rb_ref.run(
             py_avg=py_avg,
             max_circuit_depth=max_circuit_depth,
@@ -157,6 +158,7 @@ class AutoRB:
             number_sample=number_sample,
             seed=seed,
             prefix=prefix,
+            randomize_depth_order=randomize_depth_order,
         )
         self.results["ref"] = self._fit_rb(rb_ref)
 
@@ -179,7 +181,7 @@ class AutoRB:
                     continue
 
             print(f"\n=== IRB  gate = {gate} ===")
-            rb_irb = RandomizedBenchmarking(self.soc, self.soccfg, self.cfg)
+            rb_irb = RandomizedBenchmarking(self.cfg)
 
             # 因為我們改過 s015，這裡直接傳入 gate 字串即可
             rb_irb.run(
@@ -190,6 +192,7 @@ class AutoRB:
                 interleaved_gate=gate,
                 seed=seed,
                 prefix=prefix,
+                randomize_depth_order=randomize_depth_order,
             )
 
             res = self._fit_rb(rb_irb)
