@@ -50,9 +50,12 @@ class SingleShotProgram_gef(BaseProgram):
 class SingleShot_gef:
     """Single-shot readout for g/e/f state discrimination."""
 
-    def __init__(self, soc, soccfg, config):
-        self.soc = soc
-        self.soccfg = soccfg
+    def __init__(self, config):
+        from .base_experiment import BaseExperiment
+        if BaseExperiment._soc is None:
+            raise RuntimeError("Call BaseExperiment.setup(soc, soccfg, data_path) first.")
+        self.soc = BaseExperiment._soc
+        self.soccfg = BaseExperiment._soccfg
         self.cfg = config
 
     def run(self, SHOTS, shot_f=False):
@@ -85,7 +88,9 @@ class SingleShot_gef:
     def saveLabber(self, qb_idx, yoko_value=None):
         has_f = "If" in self.data
         expt_name = ("s000_singleshot_gef" if has_f else "s000_singleshot_ge") + f"_{qb_idx}"
-        file_path = get_next_filename_labber(DATA_PATH, expt_name, yoko_value)
+        from .base_experiment import BaseExperiment
+        save_dir = BaseExperiment._data_path or DATA_PATH
+        file_path = get_next_filename_labber(save_dir, expt_name, yoko_value)
         print("Current data file: " + file_path)
 
         dict_val = config_to_yaml(self.cfg)

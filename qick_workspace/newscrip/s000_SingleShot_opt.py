@@ -62,9 +62,12 @@ class SingleShot_ge_opt:
     multi-dimensional software loop rather than liveplotfun.
     """
 
-    def __init__(self, soc, soccfg, config):
-        self.soc = soc
-        self.soccfg = soccfg
+    def __init__(self, config):
+        from .base_experiment import BaseExperiment
+        if BaseExperiment._soc is None:
+            raise RuntimeError("Call BaseExperiment.setup(soc, soccfg, data_path) first.")
+        self.soc = BaseExperiment._soc
+        self.soccfg = BaseExperiment._soccfg
         self.cfg = config
 
     def run(self, SHOTS, sweep_para: dict, shot_f=False):
@@ -401,6 +404,18 @@ class SingleShot_ge_opt:
                         method="L-BFGS-B",
                         bounds=opt_bounds,
                     )
+
+                    # L-BFGS-B can fail on noisy/oscillating cubic splines
+                    # (ABNORMAL_TERMINATION_IN_LNSRCH). Retry with Nelder-Mead
+                    # which is gradient-free and more robust on such surfaces.
+                    if not result.success:
+                        result = minimize(
+                            objective_func,
+                            opt_initial_guess,
+                            method="Nelder-Mead",
+                            bounds=opt_bounds,
+                            options={"xatol": 1e-4, "fatol": 1e-5, "maxiter": 2000},
+                        )
 
                     if not result.success:
                         print(

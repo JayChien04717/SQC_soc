@@ -18,6 +18,9 @@ class BaseExperiment:
     """
     Base class for all experiment wrappers.
 
+    Session initialisation (call once per notebook):
+        BaseExperiment.setup(soc, soccfg, data_path)
+
     Subclasses need to:
     1. Set class-level metadata attributes (EXPT_NAME, TAG, X_LABEL, etc.)
     2. Override _create_program() — return the Program instance
@@ -34,6 +37,27 @@ class BaseExperiment:
             ...
     """
 
+    # ── Session state — set once per notebook via BaseExperiment.setup() ──
+    _soc = None
+    _soccfg = None
+    _data_path = None   # overrides DATA_PATH from system_cfg when set
+
+    @classmethod
+    def setup(cls, soc, soccfg, data_path):
+        """
+        Initialise the shared QICK session.  Call once at notebook startup:
+
+            BaseExperiment.setup(soc, soccfg, r"D:\\Labber_Data\\...")
+        """
+        cls._soc = soc
+        cls._soccfg = soccfg
+        cls._data_path = data_path
+
+    @classmethod
+    def set_data_path(cls, data_path):
+        """Change the save directory at runtime without re-connecting."""
+        cls._data_path = data_path
+
     # ── Subclass must set these metadata ──
     EXPT_NAME: str = ""
     TAG: str = ""
@@ -42,7 +66,7 @@ class BaseExperiment:
     TITLE_PREFIX: str = ""
     SWEEP_KEYS_TO_REMOVE: list = []
 
-    # ── IQ processing mode ──
+    # ── IQ processing mode (class-level default, overridable in run()) ──
     # "abs"  → np.abs(iqdata)  — default, works without readout optimization
     # "real" → np.real(iqdata) — use after readout optimization (best SNR on I axis)
     IQ_PROCESS: str = "abs"
@@ -59,9 +83,14 @@ class BaseExperiment:
     Y_SAVE_UNIT: str = ""
     Y_SAVE_SCALE: float = 1.0
 
-    def __init__(self, soc, soccfg, config):
-        self.soc = soc
-        self.soccfg = soccfg
+    def __init__(self, config):
+        if BaseExperiment._soc is None:
+            raise RuntimeError(
+                "QICK session not initialised. "
+                "Call BaseExperiment.setup(soc, soccfg, data_path) first."
+            )
+        self.soc = BaseExperiment._soc
+        self.soccfg = BaseExperiment._soccfg
         self.cfg = config
         self.iqdata = None
         self.fit_params = None
@@ -72,17 +101,22 @@ class BaseExperiment:
     # Unified entry point
     # ══════════════════════════════════════════════
 
-    def run(self, py_avg, show_final_plot=False, **kwargs):
+    def run(self, py_avg, iq_process=None, show_final_plot=False, **kwargs):
         """
         Execute the experiment with liveplot.
 
         Args:
-            py_avg: number of software averages
-            **kwargs: extra args passed to subclass hooks
+            py_avg:      number of software averages
+            iq_process:  "abs" or "real" — overrides the class-level IQ_PROCESS
+                         for this run only.  Use "real" after readout optimisation.
+            **kwargs:    extra args passed to subclass hooks
 
         Returns:
             Fitting result (if any), or None.
         """
+        if iq_process is not None:
+            self.IQ_PROCESS = iq_process
+
         prog = self._create_program()
         self._sweep_vals_x = self._extract_sweep_axis(prog)
         self._sweep_vals_y = self._extract_sweep_axis_y(prog)
@@ -133,7 +167,8 @@ class BaseExperiment:
             expt_name = f"{self.EXPT_NAME}_{qb_idx}_{title}"
         else:
             expt_name = f"{self.EXPT_NAME}_{qb_idx}"
-        file_path = get_next_filename_labber(DATA_PATH, expt_name, yoko_value)
+        save_dir = BaseExperiment._data_path or DATA_PATH
+        file_path = get_next_filename_labber(save_dir, expt_name, yoko_value)
 
         if config_all is not None:
             dict_val = config_all.to_yaml(q_id=qb_idx)

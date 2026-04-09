@@ -72,9 +72,12 @@ class RBProgram(BaseProgram):
 # Experiment class
 # ====================================================== #
 class RandomizedBenchmarking:
-    def __init__(self, soc, soccfg, config):
-        self.soc = soc
-        self.soccfg = soccfg
+    def __init__(self, config):
+        from .base_experiment import BaseExperiment
+        if BaseExperiment._soc is None:
+            raise RuntimeError("Call BaseExperiment.setup(soc, soccfg, data_path) first.")
+        self.soc = BaseExperiment._soc
+        self.soccfg = BaseExperiment._soccfg
         self.cfg = config
         self.x = None
         self.rb_result = None
@@ -152,7 +155,9 @@ class RandomizedBenchmarking:
         else:
             expt_name = f"s015_RB_{qb_idx}_ref"
 
-        file_path = get_next_filename_labber(DATA_PATH, expt_name, yoko_value)
+        from .base_experiment import BaseExperiment
+        save_dir = BaseExperiment._data_path or DATA_PATH
+        file_path = get_next_filename_labber(save_dir, expt_name, yoko_value)
         dict_val = (
             config_all.to_yaml(q_id=qb_idx)
             if config_all is not None

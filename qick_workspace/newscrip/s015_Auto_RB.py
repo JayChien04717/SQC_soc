@@ -108,9 +108,12 @@ class AutoRB:
         "tab:brown",
     ]
 
-    def __init__(self, soc, soccfg, cfg):
-        self.soc = soc
-        self.soccfg = soccfg
+    def __init__(self, cfg):
+        from .base_experiment import BaseExperiment
+        if BaseExperiment._soc is None:
+            raise RuntimeError("Call BaseExperiment.setup(soc, soccfg, data_path) first.")
+        self.soc = BaseExperiment._soc
+        self.soccfg = BaseExperiment._soccfg
         self.cfg = cfg
         self.results = {}
         self._gates = []

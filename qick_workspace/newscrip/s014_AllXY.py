@@ -75,9 +75,12 @@ class AllXYProgram(BaseProgram):
 class AllXY:
     """AllXY gate error diagnostic (21 gate-pair sequences)."""
 
-    def __init__(self, soc, soccfg, config):
-        self.soc = soc
-        self.soccfg = soccfg
+    def __init__(self, config):
+        from .base_experiment import BaseExperiment
+        if BaseExperiment._soc is None:
+            raise RuntimeError("Call BaseExperiment.setup(soc, soccfg, data_path) first.")
+        self.soc = BaseExperiment._soc
+        self.soccfg = BaseExperiment._soccfg
         self.cfg = config
 
     def run(self, py_avg, iq_process="abs"):
@@ -136,7 +139,9 @@ class AllXY:
 
     def saveLabber(self, qb_idx, yoko_value=None):
         expt_name = f"s014_AllXY_ge_{qb_idx}"
-        file_path = get_next_filename_labber(DATA_PATH, expt_name, yoko_value)
+        from .base_experiment import BaseExperiment
+        save_dir = BaseExperiment._data_path or DATA_PATH
+        file_path = get_next_filename_labber(save_dir, expt_name, yoko_value)
         dict_val = config_to_yaml(self.cfg)
         hdf5_generator(
             filepath=file_path,
