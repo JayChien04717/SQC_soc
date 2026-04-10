@@ -202,10 +202,11 @@ class SingleShot_ge_opt:
             print("Error: 'run' method must be called first to define sweep axes.")
             return
 
-        fid_Array = np.zeros((len_L, len_G, len_F))
-        sep_array = np.zeros((len_L, len_G, len_F))
+        fid_Array  = np.zeros((len_L, len_G, len_F))
+        sep_array  = np.zeros((len_L, len_G, len_F))
         sk_g_array = np.zeros((len_L, len_G, len_F))
         sk_e_array = np.zeros((len_L, len_G, len_F))
+        snr_array  = np.zeros((len_L, len_G, len_F))
 
         shot_f = getattr(self, "_shot_f", False)
         metric_label = "GMM fidelity (gef)" if shot_f else "GMM fidelity (ge)"
@@ -242,11 +243,23 @@ class SingleShot_ge_opt:
                     if n > 1e-12:
                         pg = ((I_g - mg[0]) * v[0] + (Q_g - mg[1]) * v[1]) / n
                         pe = ((I_e - mg[0]) * v[0] + (Q_e - mg[1]) * v[1]) / n
-                        sep_array[l_idx, g_idx, f_idx] = n
+                        sep_array[l_idx, g_idx, f_idx]  = n
                         sk_g_array[l_idx, g_idx, f_idx] = float(_skew(pg))
                         sk_e_array[l_idx, g_idx, f_idx] = float(_skew(pe))
+                        snr_array[l_idx, g_idx, f_idx]  = n ** 2 / (pg.var() + pe.var() + 1e-30)
 
-        max_idx = np.unravel_index(np.argmax(fid_Array), fid_Array.shape)
+        # Weighted score: fidelity (60%) + SNR (30%) - skewness penalty (10%)
+        # Normalise each metric to [0, 1] before combining so they are comparable.
+        def _norm01(arr):
+            mn, mx = np.nanmin(arr), np.nanmax(arr)
+            return (arr - mn) / (mx - mn + 1e-12)
+
+        score_Array = (
+            0.6 * _norm01(fid_Array)
+            + 0.3 * _norm01(snr_array)
+            - 0.1 * _norm01(np.abs(sk_g_array) + np.abs(sk_e_array))
+        )
+        max_idx = np.unravel_index(np.argmax(score_Array), score_Array.shape)
         max_l_idx, max_g_idx, max_f_idx = max_idx
 
         max_fid_grid = fid_Array[max_idx]
@@ -389,6 +402,7 @@ class SingleShot_ge_opt:
                 print("Returning grid search result.")
 
         self.fid_Array  = fid_Array
+        self.snr_array  = snr_array
         self.sep_array  = sep_array
         self.sk_g_array = sk_g_array
         self.sk_e_array = sk_e_array
@@ -431,6 +445,7 @@ class SingleShot_ge_opt:
             return
 
         fid_arr = self.fid_Array        # (len_L, len_G, len_F)
+        snr_arr = self.snr_array
         sep_arr = self.sep_array
         skg_arr = self.sk_g_array
         ske_arr = self.sk_e_array
@@ -442,6 +457,7 @@ class SingleShot_ge_opt:
             return np.take_along_axis(arr, best_f[:, :, None], axis=2)[:, :, 0]
 
         fid_2d     = _take(fid_arr)
+        snr_2d     = _take(snr_arr)
         sep_2d     = _take(sep_arr)
         skg_2d     = _take(skg_arr)
         ske_2d     = _take(ske_arr)
@@ -487,7 +503,8 @@ class SingleShot_ge_opt:
         sk_max = max(float(np.nanmax(np.abs(skg_2d))),
                      float(np.nanmax(np.abs(ske_2d))), 0.1)
 
-        fig, axs = plt.subplots(2, 3, figsize=(16, 10))
+        # 2 rows × 4 cols: 7 panels, last cell hidden
+        fig, axs = plt.subplots(2, 4, figsize=(21, 10))
         fig.suptitle("SingleShot Optimization — Grid Analysis", fontsize=13)
 
         _imshow(axs[0, 0], fid_2d,
@@ -496,7 +513,10 @@ class SingleShot_ge_opt:
         _imshow(axs[0, 1], sep_2d,
                 "IQ Separation (LDA)", "Blues",
                 vmin=0, fmt=".3f", cbar_label="Separation [ADC]")
-        _imshow(axs[0, 2], clean_fid,
+        _imshow(axs[0, 2], snr_2d,
+                "SNR  (‖Δμ‖² / (σ_g² + σ_e²))", "plasma",
+                vmin=0, fmt=".2f", cbar_label="SNR")
+        _imshow(axs[0, 3], clean_fid,
                 f"Clean Fidelity  (|sk_g|, |sk_e| < {skew_thr})", "RdYlGn",
                 vmin=0.5, vmax=1.0, fmt=".3f",
                 cbar_label="Fidelity", bad_color="0.80")
@@ -509,6 +529,7 @@ class SingleShot_ge_opt:
         _imshow(axs[1, 2], quality_2d,
                 "Quality Score  (fid − 0.05·(|sk_g|+|sk_e|))", "RdYlGn",
                 fmt=".3f", cbar_label="Score")
+        axs[1, 3].axis("off")   # spare cell
 
         fig.tight_layout(rect=[0, 0, 1, 0.96])
 
