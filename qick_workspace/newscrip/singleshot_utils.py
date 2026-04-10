@@ -158,6 +158,31 @@ def _fit_gmm(I_projs, xlims, n_init=5, max_components=2):
         primary_stds[i]    = float(np.sqrt(gmm.covariances_[idx, 0, 0]))
         primary_weights[i] = float(gmm.weights_[idx])
 
+    # ── Guard: secondary components must lie within the primary-mean range ──
+    # Physical constraint: T1 decay brings |e⟩ toward |g⟩, thermal excitation
+    # brings |g⟩ toward |e⟩.  A secondary Gaussian whose mean lies *outside*
+    # the envelope spanned by all primary means is modelling noise or a
+    # systematic artifact (e.g. RITS, readout-induced transitions), not a
+    # physical decay channel.  Refit any such state with a single Gaussian so
+    # the fidelity estimate is not inflated by a spurious component.
+    if n_states >= 2:
+        pmin, pmax = primary_means.min(), primary_means.max()
+        for i, gmm in enumerate(state_gmms):
+            if gmm.n_components <= 1:
+                continue
+            dom_idx = int(np.argmax(gmm.weights_))
+            out_of_range = any(
+                not (pmin - 1e-9 <= float(gmm.means_[j, 0]) <= pmax + 1e-9)
+                for j in range(gmm.n_components)
+                if j != dom_idx
+            )
+            if out_of_range:
+                state_gmms[i] = _bic_gmm(I_projs[i].reshape(-1, 1), 1, n_init)
+                idx2 = int(np.argmax(state_gmms[i].weights_))
+                primary_means[i]   = float(state_gmms[i].means_[idx2, 0])
+                primary_stds[i]    = float(np.sqrt(state_gmms[i].covariances_[idx2, 0, 0]))
+                primary_weights[i] = float(state_gmms[i].weights_[idx2])
+
     # Sort states by primary mean (left → right in histogram)
     state_order = np.argsort(primary_means)
 
