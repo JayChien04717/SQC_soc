@@ -1,7 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
-from scipy.stats import skew as _skew
 
 # ----- Qick package ----- #
 from qick import *
@@ -202,11 +201,9 @@ class SingleShot_ge_opt:
             print("Error: 'run' method must be called first to define sweep axes.")
             return
 
-        fid_Array  = np.zeros((len_L, len_G, len_F))
-        sep_array  = np.zeros((len_L, len_G, len_F))
-        sk_g_array = np.zeros((len_L, len_G, len_F))
-        sk_e_array = np.zeros((len_L, len_G, len_F))
-        snr_array  = np.zeros((len_L, len_G, len_F))
+        fid_Array = np.zeros((len_L, len_G, len_F))
+        sep_array = np.zeros((len_L, len_G, len_F))
+        snr_array = np.zeros((len_L, len_G, len_F))
 
         shot_f = getattr(self, "_shot_f", False)
         metric_label = "GMM fidelity (gef)" if shot_f else "GMM fidelity (ge)"
@@ -235,7 +232,7 @@ class SingleShot_ge_opt:
                     result = hist(data_slice, plot=False, verbose=False)
                     fid_Array[l_idx, g_idx, f_idx] = result[0][0]
 
-                    # LDA projection for quality metrics (lightweight, no extra GMM)
+                    # LDA projection for separation and SNR
                     mg = np.array([I_g.mean(), Q_g.mean()])
                     me = np.array([I_e.mean(), Q_e.mean()])
                     v = me - mg
@@ -243,23 +240,10 @@ class SingleShot_ge_opt:
                     if n > 1e-12:
                         pg = ((I_g - mg[0]) * v[0] + (Q_g - mg[1]) * v[1]) / n
                         pe = ((I_e - mg[0]) * v[0] + (Q_e - mg[1]) * v[1]) / n
-                        sep_array[l_idx, g_idx, f_idx]  = n
-                        sk_g_array[l_idx, g_idx, f_idx] = float(_skew(pg))
-                        sk_e_array[l_idx, g_idx, f_idx] = float(_skew(pe))
-                        snr_array[l_idx, g_idx, f_idx]  = n ** 2 / (pg.var() + pe.var() + 1e-30)
+                        sep_array[l_idx, g_idx, f_idx] = n
+                        snr_array[l_idx, g_idx, f_idx] = n ** 2 / (pg.var() + pe.var() + 1e-30)
 
-        # Weighted score: fidelity (60%) + SNR (30%) - skewness penalty (10%)
-        # Normalise each metric to [0, 1] before combining so they are comparable.
-        def _norm01(arr):
-            mn, mx = np.nanmin(arr), np.nanmax(arr)
-            return (arr - mn) / (mx - mn + 1e-12)
-
-        score_Array = (
-            0.6 * _norm01(fid_Array)
-            + 0.3 * _norm01(snr_array)
-            - 0.1 * _norm01(np.abs(sk_g_array) + np.abs(sk_e_array))
-        )
-        max_idx = np.unravel_index(np.argmax(score_Array), score_Array.shape)
+        max_idx = np.unravel_index(np.argmax(fid_Array), fid_Array.shape)
         max_l_idx, max_g_idx, max_f_idx = max_idx
 
         max_fid_grid = fid_Array[max_idx]
@@ -401,11 +385,9 @@ class SingleShot_ge_opt:
                 print(f"\nAn error occurred during interpolation: {e}")
                 print("Returning grid search result.")
 
-        self.fid_Array  = fid_Array
-        self.snr_array  = snr_array
-        self.sep_array  = sep_array
-        self.sk_g_array = sk_g_array
-        self.sk_e_array = sk_e_array
+        self.fid_Array = fid_Array
+        self.snr_array = snr_array
+        self.sep_array = sep_array
 
         return_L = round(max_length, 3) if max_length is not None else None
         return_G = round(max_gain, 6) if max_gain is not None else None
@@ -413,42 +395,26 @@ class SingleShot_ge_opt:
 
         return return_L, return_G, return_F
 
-    def plot_grid_analysis(self, skew_thr=0.5):
+    def plot_grid_analysis(self):
         """
-        Six-panel grid overview + full hist() for the best clean point.
+        Three-panel grid overview + full hist() for the best point.
 
         Panels
         ------
-        Top row:
-          1. Constrained GMM fidelity heatmap (all grid points)
-          2. IQ separation heatmap
-          3. Clean fidelity  — points with |sk_g|, |sk_e| < skew_thr shown;
-                               polluted points greyed out
-        Bottom row:
-          4. |g⟩ skewness   (positive = RITS pulling g toward |f⟩)
-          5. |e⟩ skewness   (positive = T1 decay pulling e toward |g⟩)
-          6. Quality score  (fid − 0.05 × (|sk_g| + |sk_e|))
+        1. GMM Fidelity heatmap
+        2. IQ Separation (LDA ‖Δμ‖)
+        3. SNR  (‖Δμ‖² / (σ_g² + σ_e²))
 
-        After the heatmaps, a full 4-panel hist() is shown for the best clean
+        After the heatmaps, a full hist() is shown for the highest-fidelity
         grid point so you can visually inspect the distribution.
-
-        Parameters
-        ----------
-        skew_thr : float
-            Skewness threshold for 'clean' classification (default 0.5).
         """
         if not hasattr(self, "fid_Array"):
             print("Running analyze() first ...")
             self.analyze()
-        if not hasattr(self, "sk_g_array"):
-            print("Error: quality metrics not found. Re-run analyze().")
-            return
 
         fid_arr = self.fid_Array        # (len_L, len_G, len_F)
         snr_arr = self.snr_array
         sep_arr = self.sep_array
-        skg_arr = self.sk_g_array
-        ske_arr = self.sk_e_array
         len_L, len_G, len_F = fid_arr.shape
 
         # Collapse freq dimension: for each (L, G) take the freq with best fidelity
@@ -456,16 +422,11 @@ class SingleShot_ge_opt:
         def _take(arr):
             return np.take_along_axis(arr, best_f[:, :, None], axis=2)[:, :, 0]
 
-        fid_2d     = _take(fid_arr)
-        snr_2d     = _take(snr_arr)
-        sep_2d     = _take(sep_arr)
-        skg_2d     = _take(skg_arr)
-        ske_2d     = _take(ske_arr)
-        quality_2d = fid_2d - 0.05 * (np.abs(skg_2d) + np.abs(ske_2d))
-        clean_mask = (np.abs(skg_2d) < skew_thr) & (np.abs(ske_2d) < skew_thr)
-        clean_fid  = np.where(clean_mask, fid_2d, np.nan)
+        fid_2d = _take(fid_arr)
+        snr_2d = _take(snr_arr)
+        sep_2d = _take(sep_arr)
 
-        # Axis tick labels (actual parameter values when available)
+        # Axis tick labels
         def _labels(sweep):
             if sweep[0] is None:
                 return [str(i) for i in range(len(sweep))]
@@ -476,10 +437,8 @@ class SingleShot_ge_opt:
         font_sz  = max(4, 7 - max(len_L, len_G) // 5)
 
         def _imshow(ax, data, title, cmap, vmin=None, vmax=None,
-                    fmt=".3f", cbar_label="", bad_color="0.80"):
-            cmap_obj = plt.cm.get_cmap(cmap).copy()
-            cmap_obj.set_bad(color=bad_color)
-            im = ax.imshow(data, cmap=cmap_obj, vmin=vmin, vmax=vmax,
+                    fmt=".3f", cbar_label=""):
+            im = ax.imshow(data, cmap=cmap, vmin=vmin, vmax=vmax,
                            origin="upper", aspect="auto")
             plt.colorbar(im, ax=ax, label=cbar_label, fraction=0.046, pad=0.04)
             ax.set_title(title, fontsize=10)
@@ -500,98 +459,57 @@ class SingleShot_ge_opt:
                     ax.text(j, i, format(v, fmt), ha="center", va="center",
                             fontsize=font_sz, color=tc)
 
-        sk_max = max(float(np.nanmax(np.abs(skg_2d))),
-                     float(np.nanmax(np.abs(ske_2d))), 0.1)
-
-        # 2 rows × 4 cols: 7 panels, last cell hidden
-        fig, axs = plt.subplots(2, 4, figsize=(21, 10))
+        fig, axs = plt.subplots(1, 3, figsize=(16, 5))
         fig.suptitle("SingleShot Optimization — Grid Analysis", fontsize=13)
 
-        _imshow(axs[0, 0], fid_2d,
-                "Constrained GMM Fidelity", "RdYlGn",
+        _imshow(axs[0], fid_2d,
+                "GMM Fidelity", "RdYlGn",
                 vmin=0.5, vmax=1.0, fmt=".3f", cbar_label="Fidelity")
-        _imshow(axs[0, 1], sep_2d,
-                "IQ Separation (LDA)", "Blues",
+        _imshow(axs[1], sep_2d,
+                "IQ Separation (‖Δμ‖)", "Blues",
                 vmin=0, fmt=".3f", cbar_label="Separation [ADC]")
-        _imshow(axs[0, 2], snr_2d,
+        _imshow(axs[2], snr_2d,
                 "SNR  (‖Δμ‖² / (σ_g² + σ_e²))", "plasma",
                 vmin=0, fmt=".2f", cbar_label="SNR")
-        _imshow(axs[0, 3], clean_fid,
-                f"Clean Fidelity  (|sk_g|, |sk_e| < {skew_thr})", "RdYlGn",
-                vmin=0.5, vmax=1.0, fmt=".3f",
-                cbar_label="Fidelity", bad_color="0.80")
-        _imshow(axs[1, 0], skg_2d,
-                "|g⟩ Skewness  (RITS → positive)", "RdBu_r",
-                vmin=-sk_max, vmax=sk_max, fmt="+.2f", cbar_label="Skewness")
-        _imshow(axs[1, 1], ske_2d,
-                "|e⟩ Skewness  (T1 decay → positive)", "RdBu_r",
-                vmin=-sk_max, vmax=sk_max, fmt="+.2f", cbar_label="Skewness")
-        _imshow(axs[1, 2], quality_2d,
-                "Quality Score  (fid − 0.05·(|sk_g|+|sk_e|))", "RdYlGn",
-                fmt=".3f", cbar_label="Score")
-        axs[1, 3].axis("off")   # spare cell
 
         fig.tight_layout(rect=[0, 0, 1, 0.96])
 
-        # ── Console output ──────────────────────────────────────────────────
+        # ── Console: top 5 by fidelity ──────────────────────────────────────
         def _val_str(sweep, idx):
             v = sweep[idx]
             return f"{v:.4g}" if v is not None else str(idx)
 
         all_pts = [
-            (l, g, int(best_f[l, g]),
-             fid_2d[l, g], sep_2d[l, g], skg_2d[l, g], ske_2d[l, g])
+            (l, g, int(best_f[l, g]), fid_2d[l, g], sep_2d[l, g], snr_2d[l, g])
             for l in range(len_L) for g in range(len_G)
         ]
-        clean_pts = [(l, g, f, fid, sep, sk_g, sk_e)
-                     for l, g, f, fid, sep, sk_g, sk_e in all_pts
-                     if abs(sk_g) < skew_thr and abs(sk_e) < skew_thr]
-        clean_pts.sort(key=lambda x: x[3], reverse=True)
+        all_pts.sort(key=lambda x: x[3], reverse=True)
 
-        print(f"\n=== Top 5 clean points  (|sk_g|, |sk_e| < {skew_thr}) ===")
-        print(f"  {'L':>8}  {'G':>8}  {'F':>8}  {'fid':>6}  {'sep':>6}  {'sk_g':>6}  {'sk_e':>6}")
-        for l, g, f, fid, sep, sk_g, sk_e in clean_pts[:5]:
+        print(f"\n=== Top 5 points by fidelity ===")
+        print(f"  {'L':>8}  {'G':>8}  {'F':>8}  {'fid':>6}  {'sep':>7}  {'snr':>7}")
+        for l, g, f, fid, sep, snr in all_pts[:5]:
             print(f"  {_val_str(self.length_sweep,l):>8}"
                   f"  {_val_str(self.gain_sweep,g):>8}"
                   f"  {_val_str(self.freq_sweep,f):>8}"
-                  f"  {fid:.4f}  {sep:.4f}  {sk_g:+.3f}  {sk_e:+.3f}")
+                  f"  {fid:.4f}  {sep:7.4f}  {snr:7.3f}")
 
-        print(f"\n=== Pareto: best fidelity at each skewness budget ===")
-        for thr in [0.3, 0.5, 0.7, 1.0]:
-            cands = [(fid, sk_g, sk_e, l, g, f)
-                     for l, g, f, fid, sep, sk_g, sk_e in all_pts
-                     if abs(sk_g) < thr and abs(sk_e) < thr]
-            if not cands:
-                continue
-            fid, sk_g, sk_e, l, g, f = max(cands, key=lambda x: x[0])
-            print(f"  skew < {thr:.1f}:  best fid={fid:.4f}"
-                  f"  L={_val_str(self.length_sweep,l)}"
-                  f"  G={_val_str(self.gain_sweep,g)}"
-                  f"  sk_g={sk_g:+.3f}, sk_e={sk_e:+.3f}")
-
-        # ── Full hist for best clean point ──────────────────────────────────
-        if clean_pts:
-            l, g, f, fid, sep, sk_g, sk_e = clean_pts[0]
-            l_v = _val_str(self.length_sweep, l)
-            g_v = _val_str(self.gain_sweep, g)
-            f_v = _val_str(self.freq_sweep, f)
-            print(f"\n=== Full hist for best clean point: "
-                  f"L={l_v}, G={g_v}, F={f_v}  (fid={fid:.4f}) ===")
-            data_slice = {
-                "Ig": self.data["Ig"][l, g, f],
-                "Qg": self.data["Qg"][l, g, f],
-                "Ie": self.data["Ie"][l, g, f],
-                "Qe": self.data["Qe"][l, g, f],
-            }
-            if getattr(self, "_shot_f", False):
-                data_slice["If"] = self.data["If"][l, g, f]
-                data_slice["Qf"] = self.data["Qf"][l, g, f]
-            hist(data_slice, plot=True, verbose=True,
-                 title=(f"Best clean point  L={l_v}, G={g_v}, F={f_v}"
-                        f"  —  fid={fid:.4f}  sk_g={sk_g:+.3f}  sk_e={sk_e:+.3f}"))
-        else:
-            print(f"\nNo clean points found with |sk_g|, |sk_e| < {skew_thr}.")
-            print("Consider increasing skew_thr or checking the sweep range.")
+        # ── Full hist for best point ─────────────────────────────────────────
+        l, g, f, fid, _sep, _snr = all_pts[0]
+        l_v = _val_str(self.length_sweep, l)
+        g_v = _val_str(self.gain_sweep, g)
+        f_v = _val_str(self.freq_sweep, f)
+        print(f"\n=== Full hist for best point: L={l_v}, G={g_v}, F={f_v}  (fid={fid:.4f}) ===")
+        data_slice = {
+            "Ig": self.data["Ig"][l, g, f],
+            "Qg": self.data["Qg"][l, g, f],
+            "Ie": self.data["Ie"][l, g, f],
+            "Qe": self.data["Qe"][l, g, f],
+        }
+        if getattr(self, "_shot_f", False):
+            data_slice["If"] = self.data["If"][l, g, f]
+            data_slice["Qf"] = self.data["Qf"][l, g, f]
+        hist(data_slice, plot=True, verbose=True,
+             title=f"Best point  L={l_v}, G={g_v}, F={f_v}  —  fid={fid:.4f}")
 
         plt.show()
 
