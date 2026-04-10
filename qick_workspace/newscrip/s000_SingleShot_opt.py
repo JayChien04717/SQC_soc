@@ -7,6 +7,7 @@ from qick import *
 
 # ----- User Library ----- #
 from .base_program import BaseProgram
+from .singleshot_utils import hist
 
 
 ##################
@@ -183,92 +184,6 @@ class SingleShot_ge_opt:
             self.data["If"] = self.I_f_array
             self.data["Qf"] = self.Q_f_array
 
-    @staticmethod
-    def _auc_fidelity(I_g, Q_g, I_e, Q_e):
-        """
-        Estimate readout fidelity as the AUC of the ROC curve on the
-        LDA-projected 1-D data.
-
-        Why AUC instead of per-state BIC-GMM
-        -------------------------------------
-        With ~1000 shots per state and heavily overlapping IQ clouds, per-
-        state BIC-GMM overfits:
-        - BIC selects 2 components for |g⟩ because the overlap region from
-          |e⟩ shots looks like a second mode.
-        - The resulting Bayes boundary is tuned to training-data noise and
-          gives optimistic in-sample scores (87 % → actual 68 %).
-        - Cubic interpolation then extrapolates beyond the grid, adding
-          further inflation (87 % → 90 %).
-
-        AUC is the Wilcoxon–Mann–Whitney statistic:
-            AUC = P(proj_e > proj_g)  for a randomly chosen pair
-        It equals the balanced accuracy at the empirically optimal threshold,
-        computed WITHOUT any model fitting.
-
-        Properties
-        ----------
-        - Zero free parameters  → no overfitting, reproducible across shot counts
-        - Handles any distribution shape (T1 tails, bimodal |e⟩, etc.)
-        - Variance ≈ AUC(1-AUC)/n  →  std < 1.5 % at n=1000 shots/state
-        - Equivalent to the non-parametric threshold sweep (what humans do
-          when reading a histogram): finds the empirically optimal cut
-
-        Returns 0.5 (chance level) if data is degenerate.
-        """
-        from sklearn.metrics import roc_auc_score
-
-        # ── Project 2D IQ onto the g→e mean direction (LDA axis) ──────────
-        mean_g = np.array([np.mean(I_g), np.mean(Q_g)])
-        mean_e = np.array([np.mean(I_e), np.mean(Q_e)])
-        vec    = mean_e - mean_g
-        norm   = float(np.linalg.norm(vec))
-        if norm < 1e-12:
-            return 0.5
-
-        proj_g = ((I_g - mean_g[0]) * vec[0] + (Q_g - mean_g[1]) * vec[1]) / norm
-        proj_e = ((I_e - mean_g[0]) * vec[0] + (Q_e - mean_g[1]) * vec[1]) / norm
-
-        # ── AUC = P(proj_e > proj_g) = balanced accuracy at optimal threshold
-        scores = np.concatenate([proj_g, proj_e])
-        labels = np.array([0] * len(proj_g) + [1] * len(proj_e))
-
-        try:
-            return float(roc_auc_score(labels, scores))
-        except Exception:
-            return 0.5
-
-    @staticmethod
-    def _auc_fidelity_gef(I_g, Q_g, I_e, Q_e, I_f, Q_f):
-        """
-        Average pairwise AUC for three-state (g/e/f) discrimination.
-        Computes AUC for (g vs e), (g vs f), (e vs f) and returns their mean.
-        """
-        from sklearn.metrics import roc_auc_score
-
-        pairs = [
-            (I_g, Q_g, I_e, Q_e),
-            (I_g, Q_g, I_f, Q_f),
-            (I_e, Q_e, I_f, Q_f),
-        ]
-        aucs = []
-        for I1, Q1, I2, Q2 in pairs:
-            mean1 = np.array([np.mean(I1), np.mean(Q1)])
-            mean2 = np.array([np.mean(I2), np.mean(Q2)])
-            vec   = mean2 - mean1
-            norm  = float(np.linalg.norm(vec))
-            if norm < 1e-12:
-                aucs.append(0.5)
-                continue
-            proj1 = ((I1 - mean1[0]) * vec[0] + (Q1 - mean1[1]) * vec[1]) / norm
-            proj2 = ((I2 - mean1[0]) * vec[0] + (Q2 - mean1[1]) * vec[1]) / norm
-            scores = np.concatenate([proj1, proj2])
-            labels = np.array([0] * len(proj1) + [1] * len(proj2))
-            try:
-                aucs.append(float(roc_auc_score(labels, scores)))
-            except Exception:
-                aucs.append(0.5)
-        return float(np.mean(aucs))
-
     def analyze(self):
         try:
             from scipy.interpolate import RegularGridInterpolator
@@ -289,7 +204,7 @@ class SingleShot_ge_opt:
         fid_Array = np.zeros((len_L, len_G, len_F))
 
         shot_f = getattr(self, "_shot_f", False)
-        metric_label = "AUC fidelity (gef avg pairwise)" if shot_f else "AUC fidelity (ge)"
+        metric_label = "GMM fidelity (gef)" if shot_f else "GMM fidelity (ge)"
 
         I_g_data = self.data["Ig"]
         Q_g_data = self.data["Qg"]
@@ -302,21 +217,18 @@ class SingleShot_ge_opt:
         for l_idx in tqdm(range(len_L), desc=f"Analyze {metric_label}"):
             for g_idx in range(len_G):
                 for f_idx in range(len_F):
-                    I_g = I_g_data[l_idx, g_idx, f_idx]
-                    Q_g = Q_g_data[l_idx, g_idx, f_idx]
-                    I_e = I_e_data[l_idx, g_idx, f_idx]
-                    Q_e = Q_e_data[l_idx, g_idx, f_idx]
-
+                    data_slice = {
+                        "Ig": I_g_data[l_idx, g_idx, f_idx],
+                        "Qg": Q_g_data[l_idx, g_idx, f_idx],
+                        "Ie": I_e_data[l_idx, g_idx, f_idx],
+                        "Qe": Q_e_data[l_idx, g_idx, f_idx],
+                    }
                     if shot_f:
-                        fid_Array[l_idx, g_idx, f_idx] = self._auc_fidelity_gef(
-                            I_g, Q_g, I_e, Q_e,
-                            I_f_data[l_idx, g_idx, f_idx],
-                            Q_f_data[l_idx, g_idx, f_idx],
-                        )
-                    else:
-                        fid_Array[l_idx, g_idx, f_idx] = self._auc_fidelity(
-                            I_g, Q_g, I_e, Q_e
-                        )
+                        data_slice["If"] = I_f_data[l_idx, g_idx, f_idx]
+                        data_slice["Qf"] = Q_f_data[l_idx, g_idx, f_idx]
+
+                    result = hist(data_slice, plot=False, verbose=False)
+                    fid_Array[l_idx, g_idx, f_idx] = result[0][0]
 
         max_idx = np.unravel_index(np.argmax(fid_Array), fid_Array.shape)
         max_l_idx, max_g_idx, max_f_idx = max_idx
