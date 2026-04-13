@@ -94,8 +94,10 @@ class SingleShot_gef:
         print("Current data file: " + file_path)
 
         dict_val = config_to_yaml(self.cfg)
-        keys = ["Ig", "Qg", "Ie", "Qe"] + (["If", "Qf"] if has_f else [])
-        shotdata = np.array([self.data[k] for k in keys])
+        shotdata = np.array([
+            self.data["Ig"] + 1j * self.data["Qg"],
+            self.data["Ie"] + 1j * self.data["Qe"],
+        ] + ([self.data["If"] + 1j * self.data["Qf"]] if has_f else []))
         states = [0, 1, 2] if has_f else [0, 1]
 
         hdf5_generator(
