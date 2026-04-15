@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.vscode/
+.idea/
+*.h5
+Data/
+qick/
+*.log
+.DS_Store
+.claude/
