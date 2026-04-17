@@ -29,11 +29,18 @@ class plotting(object):
 
     # TODO: refactor architecture using composition instead of inheritance, so that plotting is a separate class that can be used by any port type without needing to inherit from it
     def plotall(self) -> None:
-        # FIXME: variable assignments depend on the presence of raw and sim data via inheritance, which may not always be the case. This should be refactored to be more robust and flexible.
-        real = self.z_data_raw.real  # type: ignore
-        imag = self.z_data_raw.imag  # type: ignore
-        real2 = self.z_data_sim.real  # type: ignore
-        imag2 = self.z_data_sim.imag  # type: ignore
+        # remove electrical delay for a cleaner visualization of the raw vs fit
+        delay = getattr(self, '_delay', 0.0)
+        delay_phase = np.exp(2j * np.pi * delay * np.array(self.f_data))  # type: ignore
+        
+        z_raw_nodelay = self.z_data_raw * delay_phase  # type: ignore
+        z_sim_nodelay = self.z_data_sim * delay_phase  # type: ignore
+        
+        real = z_raw_nodelay.real
+        imag = z_raw_nodelay.imag
+        real2 = z_sim_nodelay.real
+        imag2 = z_sim_nodelay.imag
+        
         plt.subplot(221)
         plt.plot(real, imag, label="rawdata")
         plt.plot(real2, imag2, label="fit")
@@ -41,17 +48,18 @@ class plotting(object):
         plt.ylabel("Im(S21)")
         plt.legend()
         plt.subplot(222)
-        plt.plot(self.f_data * 1e-9, np.absolute(self.z_data_raw), label="rawdata")  # type: ignore
-        plt.plot(self.f_data * 1e-9, np.absolute(self.z_data_sim), label="fit")  # type: ignore
+        plt.plot(self.f_data * 1e-9, np.absolute(z_raw_nodelay), label="rawdata")  # type: ignore
+        plt.plot(self.f_data * 1e-9, np.absolute(z_sim_nodelay), label="fit")  # type: ignore
         plt.xlabel("f (GHz)")
         plt.ylabel("|S21|")
         plt.legend()
         plt.subplot(223)
-        plt.plot(self.f_data * 1e-9, np.angle(self.z_data_raw), label="rawdata")  # type: ignore
-        plt.plot(self.f_data * 1e-9, np.angle(self.z_data_sim), label="fit")  # type: ignore
+        plt.plot(self.f_data * 1e-9, np.angle(z_raw_nodelay), label="rawdata")  # type: ignore
+        plt.plot(self.f_data * 1e-9, np.angle(z_sim_nodelay), label="fit")  # type: ignore
         plt.xlabel("f (GHz)")
         plt.ylabel("arg(|S21|)")
         plt.legend()
+        plt.tight_layout()
         plt.show()
 
     def plotcalibrateddata(self) -> None:
