@@ -30,8 +30,11 @@ class plotting(object):
     # TODO: refactor architecture using composition instead of inheritance, so that plotting is a separate class that can be used by any port type without needing to inherit from it
     def plotall(self) -> None:
         # remove electrical delay for a cleaner visualization of the raw vs fit
-        delay = getattr(self, '_delay', 0.0)
-        delay_phase = np.exp(2j * np.pi * delay * np.array(self.f_data))  # type: ignore
+        if hasattr(self, '_cancel_delay_phase') and self._cancel_delay_phase is not None:
+            delay_phase = self._cancel_delay_phase
+        else:
+            delay = getattr(self, '_delay', 0.0)
+            delay_phase = np.exp(2j * np.pi * delay * np.array(self.f_data))  # type: ignore
         
         z_raw_nodelay = self.z_data_raw * delay_phase  # type: ignore
         z_sim_nodelay = self.z_data_sim * delay_phase  # type: ignore

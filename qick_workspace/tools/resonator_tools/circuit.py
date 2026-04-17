@@ -281,6 +281,7 @@ class reflection_port(circlefit, save_load, plotting, calibration):
                 "phi0": 0.0, "phi0_err": 0.0,
                 "electronic_delay": delay,
             }
+            self._cancel_delay_phase = np.exp(-2j * np.pi * delay * self.f_data)
             self._delay = delay
             self.z_data = self.z_data_raw
             self.z_data_sim = res(self.f_data)
@@ -323,6 +324,7 @@ class reflection_port(circlefit, save_load, plotting, calibration):
             alpha=0.0,
             delay=0.0,
         )
+        self._cancel_delay_phase = np.exp(2j * np.pi * delay * self.f_data)
         self._delay = delay
 
     def GUIfit(self) -> None:
@@ -806,6 +808,7 @@ class notch_port(circlefit, save_load, plotting, calibration):
                 "phi0": phi0, "phi0_err": 0.0,
                 "electronic_delay": delay,
             }
+            self._cancel_delay_phase = np.exp(-2j * np.pi * delay * self.f_data)
             self._delay = delay
             self.z_data = self.z_data_raw
             self.z_data_sim = res(self.f_data)
@@ -852,6 +855,7 @@ class notch_port(circlefit, save_load, plotting, calibration):
             alpha=0.0,
             delay=0.0,
         )
+        self._cancel_delay_phase = np.exp(2j * np.pi * delay * self.f_data)
         self._delay = delay
 
     def GUIfit(self) -> None:
