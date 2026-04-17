@@ -42,8 +42,10 @@ def complex_fit(f, xdata, ydata, p0=None, weights=None, **kwargs):
         return flat_diff
 
     kwargs_ls = kwargs.copy()
-    kwargs_ls.setdefault("max_nfev", 1000)
-    kwargs_ls.setdefault("ftol", 1e-2)
+    kwargs_ls.setdefault("max_nfev", 5000)
+    kwargs_ls.setdefault("ftol", 1e-10)
+    kwargs_ls.setdefault("xtol", 1e-10)
+    kwargs_ls.setdefault("gtol", 1e-10)
     opt_res = least_squares(residuals, p0, args=(xdata, ydata), **kwargs_ls)
 
     jac = opt_res.jac
@@ -580,17 +582,35 @@ def meta_fit_edelay(freq, signal, rec_depth=0):
 
     edelay_span = 1.5 / (np.max(freq) - np.min(freq))
 
+    # Coarse grid search
     edelay_array = guess_edelay + np.linspace(-1, 1, 1001) * edelay_span
     l2_error_array = np.zeros_like(edelay_array)
 
     for i, ed in enumerate(edelay_array):
-
         s = signal * np.exp(-2j * np.pi * freq * ed)
         _, abcd_fit = quick_fit(freq, s, rec_depth)
-
         l2_error_array[i] = np.sum(np.abs(s - abcd_fit) ** 2) / freq.size
 
-    return edelay_array[np.argmin(l2_error_array)]
+    best_ed = edelay_array[np.argmin(l2_error_array)]
+
+    # Fine-grained scalar minimization around the best coarse point
+    from scipy.optimize import minimize_scalar
+
+    fine_span = 2.0 * edelay_span / 1001
+
+    def cost(ed):
+        s = signal * np.exp(-2j * np.pi * freq * ed)
+        _, abcd_fit = quick_fit(freq, s, rec_depth)
+        return np.sum(np.abs(s - abcd_fit) ** 2) / freq.size
+
+    result = minimize_scalar(
+        cost,
+        bounds=(best_ed - fine_span, best_ed + fine_span),
+        method="bounded",
+        options={"xatol": 1e-15},
+    )
+
+    return result.x if result.success else best_ed
 
 
 def fit_signal(
@@ -649,7 +669,7 @@ def analyze(
     fit_edelay=True,
     final_ls_opti=True,
     allow_mismatch=True,
-    rec_depth=1,
+    rec_depth=3,
 ):
     return fit_signal(
         freq,

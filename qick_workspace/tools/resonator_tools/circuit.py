@@ -246,48 +246,17 @@ class reflection_port(circlefit, save_load, plotting, calibration):
         self,
         electric_delay: float | None = None,
         fcrop: tuple[float, float] | None = None,
-        use_abcd: bool = True,
     ) -> None:
         """
         automatic calibration and fitting
         electric_delay: set the electric delay manually
         fcrop = (f1,f2) : crop the frequency range used for fitting
-        use_abcd: if True, uses the robust ABCD algebraic solver engine.
         """
         if fcrop is None:
             self._fid = np.ones(self.f_data.size, dtype=bool)
         else:
             f1, f2 = fcrop
             self._fid = np.logical_and(self.f_data >= f1, self.f_data <= f2)
-            
-        if use_abcd:
-            from .abcd_solver import analyze
-            res = analyze(self.f_data[self._fid], self.z_data_raw[self._fid], geometry="t")
-            
-            fr = res.f_0 or 0.0
-            Ql = fr / res.kappa if res.kappa else 0.0
-            Qc = Ql  # Since transmission model usually doesn't separate Qi from Qc easily without phase, but we'll proxy it.
-            Qi = getattr(res, 'kappa_i', None)
-            Qi = fr / Qi if Qi else 0.0
-            delay = getattr(res, 'edelay', 0.0) or 0.0
-            
-            self.fitresults = {
-                "fr": fr, "fr_err": 0.0,
-                "Ql": Ql, "Ql_err": 0.0,
-                "Qc": Qc, "Qc_err": 0.0,
-                "absQc": Qc,
-                "Qc_dia_corr": Qc,
-                "Qi_dia_corr": Qi, "Qi_dia_corr_err": 0.0,
-                "phi0": 0.0, "phi0_err": 0.0,
-                "electronic_delay": delay,
-            }
-            self._cancel_delay_phase = np.exp(-2j * np.pi * delay * self.f_data)
-            self._delay = delay
-            self.z_data = self.z_data_raw
-            self.z_data_sim = res(self.f_data)
-            self.z_data_sim_norm = self.z_data_sim
-            return
-
         delay, amp_norm, alpha, fr, Ql, A2, frcal = self.do_calibration(
             self.f_data[self._fid],
             self.z_data_raw[self._fid],
@@ -324,7 +293,6 @@ class reflection_port(circlefit, save_load, plotting, calibration):
             alpha=0.0,
             delay=0.0,
         )
-        self._cancel_delay_phase = np.exp(2j * np.pi * delay * self.f_data)
         self._delay = delay
 
     def GUIfit(self) -> None:
@@ -772,13 +740,11 @@ class notch_port(circlefit, save_load, plotting, calibration):
         fcrop: tuple[float, float] | None = None,
         Ql_guess: float | None = None,
         fr_guess: float | None = None,
-        use_abcd: bool = True,
     ) -> None:
         """
         automatic calibration and fitting
         electric_delay: set the electric delay manually
         fcrop = (f1,f2) : crop the frequency range used for fitting
-        use_abcd: if True, uses the highly robust ABCD algebraic solver engine instead of circlefit.
         """
         assert self.f_data is not None, "No frequency data loaded"
         assert self.z_data_raw is not None, "No raw S-parameter data loaded"
@@ -787,34 +753,6 @@ class notch_port(circlefit, save_load, plotting, calibration):
         else:
             f1, f2 = fcrop
             self._fid = np.logical_and(self.f_data >= f1, self.f_data <= f2)
-            
-        if use_abcd:
-            from .abcd_solver import analyze
-            res = analyze(self.f_data[self._fid], self.z_data_raw[self._fid], geometry="hm")
-            
-            fr = res.f_0 or 0.0
-            Ql = fr / res.kappa if res.kappa else 0.0
-            Qc = fr / res.kappa_c if res.kappa_c else 0.0
-            Qi = fr / res.kappa_i if res.kappa_i else 0.0
-            phi0 = getattr(res, 'phi_0', 0.0) or 0.0
-            delay = getattr(res, 'edelay', 0.0) or 0.0
-            
-            self.fitresults = {
-                "fr": fr, "fr_err": 0.0,
-                "Ql": Ql, "Ql_err": 0.0,
-                "absQc": Qc, "absQc_err": 0.0,
-                "Qc_dia_corr": Qc,
-                "Qi_dia_corr": Qi, "Qi_dia_corr_err": 0.0,
-                "phi0": phi0, "phi0_err": 0.0,
-                "electronic_delay": delay,
-            }
-            self._cancel_delay_phase = np.exp(-2j * np.pi * delay * self.f_data)
-            self._delay = delay
-            self.z_data = self.z_data_raw
-            self.z_data_sim = res(self.f_data)
-            self.z_data_sim_norm = self.z_data_sim
-            return
-
         delay, amp_norm, alpha, fr, Ql, A2, frcal = self.do_calibration(
             self.f_data[self._fid],
             self.z_data_raw[self._fid],
@@ -855,7 +793,6 @@ class notch_port(circlefit, save_load, plotting, calibration):
             alpha=0.0,
             delay=0.0,
         )
-        self._cancel_delay_phase = np.exp(2j * np.pi * delay * self.f_data)
         self._delay = delay
 
     def GUIfit(self) -> None:

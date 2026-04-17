@@ -2,7 +2,6 @@
 ## Functions to evaluate noise data
 ######
 
-from __future__ import annotations
 import numpy as np
 import numpy.typing as npt
 from scipy.signal import periodogram

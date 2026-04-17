@@ -113,42 +113,55 @@ class RandomizedBenchmarking:
         desc = f"IRB ({interleaved_gate})" if is_irb else "Standard RB"
         rng = np.random.default_rng(seed)
 
+        # Pre-generate seeds for all (depth_idx, sample) pairs so each
+        # average iteration replays the same set of random circuits.
+        n_depths = len(self.x)
+        seeds_matrix = [
+            [int(rng.integers(0, 2**31)) for _ in range(number_sample)]
+            for _ in range(n_depths)
+        ]
+
         # Depth measurement order
-        depth_indices = np.arange(len(self.x))
+        depth_indices = np.arange(n_depths)
         if randomize_depth_order:
             rng.shuffle(depth_indices)
             print(f"  Depth order: {self.x[depth_indices].tolist()}")
 
-        rb_result = [None] * len(self.x)
-        for idx in tqdm(depth_indices, desc=desc):
-            depth = self.x[idx]
-            rblist = []
-            for _ in tqdm(range(number_sample), desc="Samples", leave=False):
-                child_seed = int(rng.integers(0, 2**31))
+        rb_accum = [[None] * number_sample for _ in range(n_depths)]
 
-                seqs = single_qb_rb(
-                    n_clifford=depth,
-                    n_sample=1,
-                    interleave=interleaved_gate,
-                    seed=child_seed,
-                )
-                gate_seq = seqs[0]   # flat list of gate strings
+        for avg_i in tqdm(range(py_avg), desc="Software Average"):
+            for idx in tqdm(depth_indices, desc=desc, leave=False):
+                depth = self.x[idx]
+                for s_i in tqdm(range(number_sample), desc="Samples", leave=False):
+                    seqs = single_qb_rb(
+                        n_clifford=depth,
+                        n_sample=1,
+                        interleave=interleaved_gate,
+                        seed=seeds_matrix[idx][s_i],
+                    )
+                    gate_seq = seqs[0]   # flat list of gate strings
 
-                self.cfg["gate_seq"] = gate_seq
-                self.cfg["prefix"] = prefix
+                    self.cfg["gate_seq"] = gate_seq
+                    self.cfg["prefix"] = prefix
 
-                prog = RBProgram(
-                    self.soccfg,
-                    reps=self.cfg["reps"],
-                    final_delay=self.cfg["relax_delay"],
-                    cfg=self.cfg,
-                )
-                iq_list = prog.acquire(self.soc, rounds=py_avg, progress=False)
-                rblist.append(iq_list[0][0].dot([1, 1j]))
+                    prog = RBProgram(
+                        self.soccfg,
+                        reps=self.cfg["reps"],
+                        final_delay=self.cfg["relax_delay"],
+                        cfg=self.cfg,
+                    )
+                    iq_list = prog.acquire(self.soc, rounds=1, progress=False)
+                    iq_data = iq_list[0][0].dot([1, 1j])
 
-            rb_result[idx] = rblist
+                    if avg_i == 0:
+                        rb_accum[idx][s_i] = iq_data
+                    else:
+                        rb_accum[idx][s_i] = rb_accum[idx][s_i] + iq_data
 
-        self.rb_result = rb_result
+        self.rb_result = [
+            [rb_accum[idx][s_i] / py_avg for s_i in range(number_sample)]
+            for idx in range(n_depths)
+        ]
 
     def saveLabber(self, qb_idx, config_all=None, yoko_value=None, title=None):
         if self.x is None or self.rb_result is None:

@@ -29,64 +29,29 @@ class plotting(object):
 
     # TODO: refactor architecture using composition instead of inheritance, so that plotting is a separate class that can be used by any port type without needing to inherit from it
     def plotall(self) -> None:
-        # remove electrical delay for a cleaner visualization of the raw vs fit
-        if hasattr(self, '_cancel_delay_phase') and self._cancel_delay_phase is not None:
-            delay_phase = self._cancel_delay_phase
-        else:
-            delay = getattr(self, '_delay', 0.0)
-            delay_phase = np.exp(2j * np.pi * delay * np.array(self.f_data))  # type: ignore
-        
-        z_raw_nodelay = self.z_data_raw * delay_phase  # type: ignore
-        z_sim_nodelay = self.z_data_sim * delay_phase  # type: ignore
-        
-        real = z_raw_nodelay.real
-        imag = z_raw_nodelay.imag
-        real2 = z_sim_nodelay.real
-        imag2 = z_sim_nodelay.imag
-        
-        import matplotlib.gridspec as gridspec
-        fig = plt.figure(figsize=(10, 6))
-        gs = gridspec.GridSpec(2, 2)
-        
-        ax_amp = fig.add_subplot(gs[:, 0])
-        ax_iq = fig.add_subplot(gs[0, 1])
-        ax_phase = fig.add_subplot(gs[1, 1])
-        
-        # Plot Amplitude (Left bridging 2 rows)
-        ax_amp.plot(self.f_data * 1e-9, np.absolute(z_raw_nodelay), label="rawdata")  # type: ignore
-        ax_amp.plot(self.f_data * 1e-9, np.absolute(z_sim_nodelay), label="fit")  # type: ignore
-        ax_amp.set_xlabel("f (GHz)")
-        ax_amp.set_ylabel("|S21|")
-        ax_amp.legend()
-
-        # Plot IQ circle (Right Top)
-        ax_iq.plot(real, imag, label="rawdata")
-        ax_iq.plot(real2, imag2, label="fit")
-        # Ensure IQ plot is somewhat square to not distort the circle visualization
-        ax_iq.set_aspect('equal', 'datalim') 
-        ax_iq.set_xlabel("Re(S21)")
-        ax_iq.set_ylabel("Im(S21)")
-        ax_iq.legend()
-        
-        # Plot Phase (Right Bottom)
-        ax_phase.plot(self.f_data * 1e-9, np.angle(z_raw_nodelay), label="rawdata")  # type: ignore
-        ax_phase.plot(self.f_data * 1e-9, np.angle(z_sim_nodelay), label="fit")  # type: ignore
-        ax_phase.set_xlabel("f (GHz)")
-        ax_phase.set_ylabel("arg(|S21|)")
-        ax_phase.legend()
-
-        # Add Title with fit parameters if available
-        if hasattr(self, 'fitresults') and self.fitresults and self.fitresults.get('fr') is not None:
-            fr = self.fitresults.get('fr', 0.0)
-            Ql = self.fitresults.get('Ql', 0.0)
-            Qc = self.fitresults.get('Qc_dia_corr', self.fitresults.get('absQc', self.fitresults.get('Qc', 0.0)))
-            Qi = self.fitresults.get('Qi_dia_corr', self.fitresults.get('Qi', 0.0))
-            kappa = fr / Ql if Ql else 0.0
-            
-            title_str = f"fr = {fr*1e-9:.5f} GHz  |  $\kappa/2\pi$ = {kappa*1e-6:.2f} MHz\nQi = {Qi:.1f}  |  Qc = {Qc:.1f}"
-            fig.suptitle(title_str, fontsize=12)
-
-        plt.tight_layout()
+        # FIXME: variable assignments depend on the presence of raw and sim data via inheritance, which may not always be the case. This should be refactored to be more robust and flexible.
+        real = self.z_data_raw.real  # type: ignore
+        imag = self.z_data_raw.imag  # type: ignore
+        real2 = self.z_data_sim.real  # type: ignore
+        imag2 = self.z_data_sim.imag  # type: ignore
+        plt.subplot(221)
+        plt.plot(real, imag, label="rawdata")
+        plt.plot(real2, imag2, label="fit")
+        plt.xlabel("Re(S21)")
+        plt.ylabel("Im(S21)")
+        plt.legend()
+        plt.subplot(222)
+        plt.plot(self.f_data * 1e-9, np.absolute(self.z_data_raw), label="rawdata")  # type: ignore
+        plt.plot(self.f_data * 1e-9, np.absolute(self.z_data_sim), label="fit")  # type: ignore
+        plt.xlabel("f (GHz)")
+        plt.ylabel("|S21|")
+        plt.legend()
+        plt.subplot(223)
+        plt.plot(self.f_data * 1e-9, np.angle(self.z_data_raw), label="rawdata")  # type: ignore
+        plt.plot(self.f_data * 1e-9, np.angle(self.z_data_sim), label="fit")  # type: ignore
+        plt.xlabel("f (GHz)")
+        plt.ylabel("arg(|S21|)")
+        plt.legend()
         plt.show()
 
     def plotcalibrateddata(self) -> None:
