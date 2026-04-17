@@ -6,9 +6,9 @@ from typing import Optional, Dict
 import pprint
 
 try:
-    from .abcd_rf_fit import *
-except:
-    print("No circle fit package")
+    from .resonator_tools.abcd_solver import analyze
+except Exception as e:
+    print("No circle fit package:", e)
 
 figsize = (10, 4)
 marker_style = {
@@ -74,7 +74,7 @@ def resonator_circlefit(x: float, y: float, solve_type: str = "hm") -> Optional[
         fitting result, data contain Qc, Qi, Ql .ect.
     """
     fit = analyze(x * 1e6, y, solve_type, fit_edelay=True)
-    fit.plot()
+    # abcd_rf_fit plot() removed; integration prefers plotall() externally
     param = fit.tolist()
     result_dict = {
         "Fres(GHz)": round(param[0] / 1e9, 4),
