@@ -6,9 +6,9 @@ from scipy.constants import hbar
 from scipy.interpolate import splrep, splev
 from typing import Any
 
-from resonator_tools.utilities import plotting, save_load, Watt2dBm, dBm2Watt
-from resonator_tools.circlefit import circlefit
-from resonator_tools.calibration import calibration
+from .utilities import plotting, save_load, Watt2dBm, dBm2Watt
+from .circlefit import circlefit
+from .calibration import calibration
 
 
 FloatArray = npt.NDArray[np.float64]
