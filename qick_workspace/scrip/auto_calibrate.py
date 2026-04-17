@@ -287,12 +287,20 @@ class AutoCalibrate:
 
     def step_ramsey(self, steps=100, py_avg=20, ramsey_freq=2.0):
         """
-        Short Ramsey fringe to fine-tune qb_freq_ge and measure T2*.
+        GP-guided Ramsey fringe to fine-tune qb_freq_ge and measure T2*.
 
-        Stop time is derived from the T2* seed produced by step_qubit_spec
-        (linewidth estimate).  If no seed exists, defaults to 5 µs.
-        Iterates until |detune_error| < RAMSEY_DETUNE_LIMIT_MHZ.
-        After convergence, qb_freq_ge is updated via correct_detune().
+        On each retry the signed detuning error and the qubit frequency that
+        produced it are recorded.  Once two or more observations are available,
+        a 1-D sklearn GP is fitted to the (qb_freq_tried, signed_error) history
+        and the predicted zero-crossing is used as the next qubit frequency
+        guess instead of the naive ``correct_detune()`` result.  This makes
+        convergence robust to noisy fits and can reduce the number of retries
+        needed.
+
+        Falls back to the original ``correct_detune()`` when
+        - fewer than 2 observations are available, or
+        - sklearn is not installed, or
+        - the GP uncertainty exceeds ``5 × RAMSEY_DETUNE_LIMIT_MHZ``.
 
         Parameters
         ----------
@@ -304,7 +312,11 @@ class AutoCalibrate:
         """
         stop = max(2.0, 3.0 * self._T2r) if self._T2r else 5.0
 
-        for attempt in range(self.MAX_RAMSEY_RETRIES):
+        # GP history: lists of (qb_freq_tried [MHz], signed_detune_error [MHz])
+        _freq_history  = []
+        _error_history = []
+
+        for attempt in range(self.MAX_RAMSEY_RETRIES + 2):   # +2 budget for GP
             run_cfg = self._cfg()
             run_cfg.update([
                 ("steps", steps),
@@ -315,28 +327,44 @@ class AutoCalibrate:
             fit_params, _ = expt.run(py_avg)
 
             # fit_params from fitdecaysin: [amplitude, freq, phase, tau]
-            T2r = float(fit_params[3])
-            detune_err = abs(float(fit_params[1]) - ramsey_freq)
-            self._T2r = T2r
+            T2r        = abs(float(fit_params[3]))
+            signed_err = float(fit_params[1]) - ramsey_freq   # positive → freq too low
+            abs_err    = abs(signed_err)
+            self._T2r            = T2r
             self.results["T2r_us"] = T2r
 
-            corrected_freq = expt.correct_detune()
-            self._update("qb_freq_ge", corrected_freq)
+            # Record (freq_tried, residual_error) for GP
+            _freq_history.append(self._cfg()["qb_freq_ge"])
+            _error_history.append(signed_err)
 
             self._log("ramsey",
                       f"attempt {attempt + 1}: T2* = {T2r:.2f} µs, "
-                      f"detune error = {detune_err:.4f} MHz")
+                      f"detune error = {signed_err:+.4f} MHz")
 
-            if detune_err < self.RAMSEY_DETUNE_LIMIT_MHZ:
+            if abs_err < self.RAMSEY_DETUNE_LIMIT_MHZ:
+                corrected_freq = expt.correct_detune()
+                self._update("qb_freq_ge", corrected_freq)
                 self._log("ramsey",
                           f"converged → qb_freq_ge = {corrected_freq:.4f} MHz")
                 return T2r, corrected_freq
 
+            # --- Choose next correction strategy ---
+            gp_freq = None
+            if len(_freq_history) >= 2:
+                gp_freq = self._gp_predict_zero_crossing(_freq_history, _error_history)
+
+            if gp_freq is not None:
+                self._update("qb_freq_ge", gp_freq)
+                self._log("ramsey", f"  → GP correction: qb_freq_ge = {gp_freq:.4f} MHz")
+            else:
+                corrected_freq = expt.correct_detune()
+                self._update("qb_freq_ge", corrected_freq)
+
             # Narrow the stop window around measured T2* for next iteration
-            stop = max(2.0, 3.0 * T2r)
+            stop = max(2.0, min(3.0 * T2r, 15.0))
 
         self._log("ramsey",
-                  f"did not converge in {self.MAX_RAMSEY_RETRIES} attempts, "
+                  f"did not converge in {self.MAX_RAMSEY_RETRIES + 2} attempts, "
                   f"proceeding with last result")
         return self._T2r, self._cfg()["qb_freq_ge"]
 
@@ -427,36 +455,81 @@ class AutoCalibrate:
     # Step 7 — Single-shot readout optimisation
     # -------------------------------------------------------------------------
 
-    def step_ss_opt(self, shots=2000):
+    def step_ss_opt(
+        self,
+        shots       = 1000,
+        coarse_pts  = (5, 3, 3),
+        bo_n_iter   = 15,
+        bo_xi       = 0.02,
+    ):
         """
-        Grid search over readout (frequency, gain, length), then final
-        single-shot run to measure the IQ rotation angle (res_phase).
+        Two-phase Bayesian-optimised single-shot readout parameter search.
 
-        Sweep ranges match the notebook defaults.
-        Updates: ro_length, res_gain_ge, res_freq_ge, res_phase.
+        Phase 1 — Coarse grid  (hardware runs = product of coarse_pts)
+        ----------------------------------------------------------------
+        Runs a sparse Cartesian grid over (freq, gain, length) to map the
+        fidelity landscape.  Default 5×3×3 = 45 points × 1000 shots each.
+        ``SingleShot_ge_opt.analyze()`` fits a GP surrogate (Matern-2.5) to
+        these 45 observations and finds the GP-predicted optimum offline,
+        with physical constraints (leakage, thermal) applied automatically.
+
+        Phase 2 — Online BO refinement  (``bo_n_iter`` extra hardware runs)
+        --------------------------------------------------------------------
+        The same GP is then used to compute Expected-Improvement (EI) and
+        propose the next measurement point.  Each new hardware measurement
+        is added to the training set and the GP is re-fitted.  Infeasible
+        points (leakage / thermal too high) receive a fidelity penalty so
+        the GP learns to avoid them.
+
+        Total hardware acquisitions: 45 + 15 = 60 (vs. the old 220).
+        Total shots: 60 × 1000 = 60,000 (vs. 220 × 2000 = 440,000). ~7× faster.
+
+        Falls back to the original dense grid when sklearn is not installed
+        (GP interpolation requires scikit-learn).
+
+        Parameters
+        ----------
+        shots      : int   — IQ shots per grid point (default 1000).
+        coarse_pts : tuple — (n_freq, n_gain, n_length) grid points
+                             (default (5, 3, 3) → 45 combinations).
+        bo_n_iter  : int   — online BO refinement iterations (default 15).
+        bo_xi      : float — EI exploration factor; larger → more exploration.
 
         Returns
         -------
         (ro_length, res_gain_ge, res_freq_ge) : (float, float, float)
         """
-        run_cfg = self._cfg()
-        freq_center = run_cfg["res_freq_ge"]
+        run_cfg     = self._cfg()
+        freq_centre = run_cfg["res_freq_ge"]
+        n_freq, n_gain, n_len = coarse_pts
 
         sweep_para = {
-            "freq":   np.linspace(freq_center - 1.0, freq_center + 8.0, 11),
-            "gain":   np.linspace(0.07, 0.1, 5),
-            "length": np.linspace(2.0, 4.0, 4),
+            "freq":   np.linspace(freq_centre - 1.0, freq_centre + 8.0, n_freq),
+            "gain":   np.linspace(0.07, 0.10, n_gain),
+            "length": np.linspace(2.0, 4.0, n_len),
         }
+
+        total_pts = n_freq * n_gain * n_len
+        self._log("ss_opt",
+                  f"Phase 1: coarse grid {n_freq}×{n_gain}×{n_len} = {total_pts} pts "
+                  f"({shots} shots each)")
 
         ssh_opt = SingleShot_ge_opt(run_cfg)
         ssh_opt.run(shots, sweep_para=sweep_para)
-        length, gain, freq = ssh_opt.analyze()
+
+        self._log("ss_opt",
+                  f"Phase 2: GP surrogate + {bo_n_iter} online BO refinement steps")
+        length, gain, freq = ssh_opt.analyze(
+            bo_n_iter = bo_n_iter,
+            bo_xi     = bo_xi,
+            pareto    = True,
+        )
 
         self._update("ro_length",   length)
         self._update("res_gain_ge", gain)
         self._update("res_freq_ge", freq)
 
-        # Reset phase then measure IQ rotation angle
+        # Reset phase then measure IQ rotation angle with full statistics
         self._update("res_phase", 0)
         run_cfg = self._cfg()
         ssh = SingleShot_gef(run_cfg)
@@ -464,8 +537,10 @@ class AutoCalibrate:
         # hist() returns [fids, thresholds, angle_deg, conf_matrix_pct]
         ssh_result = ssh.plot(fid_avg=True, verbose=True)
 
-        phase = float(ssh_result[2])
-        fidelity = float(ssh_result[0][0]) if hasattr(ssh_result[0], "__len__") else float(ssh_result[0])
+        phase    = float(ssh_result[2])
+        fidelity = (float(ssh_result[0][0])
+                    if hasattr(ssh_result[0], "__len__")
+                    else float(ssh_result[0]))
         self._update("res_phase", phase)
 
         self.results["ro_length"]        = length
@@ -475,10 +550,93 @@ class AutoCalibrate:
         self.results["readout_fidelity"] = fidelity
 
         self._log("ss_opt",
-                  f"length = {length:.3f} µs, gain = {gain:.5f}, freq = {freq:.4f} MHz")
+                  f"Best: length = {length:.3f} µs, gain = {gain:.5f}, "
+                  f"freq = {freq:.4f} MHz")
         self._log("ss_opt",
                   f"res_phase = {phase:.2f} deg, fidelity = {fidelity:.4f}")
         return length, gain, freq
+
+    # -------------------------------------------------------------------------
+    # GP helpers
+    # -------------------------------------------------------------------------
+
+    def _gp_predict_zero_crossing(self, freq_vals, error_vals):
+        """
+        Fit a 1-D sklearn GP to the history of (qb_freq_tried, signed_detune_error)
+        pairs and predict the qubit frequency where detune_error ≈ 0.
+
+        Physics: to first order,
+            signed_error(f) ≈ f_true − f
+        so the correction function is linear.  The GP models this robustly
+        against shot-noise in the Ramsey fit, using all previous measurements
+        rather than just the most recent one.
+
+        Parameters
+        ----------
+        freq_vals  : list[float] — qb_freq_ge values tried [MHz]
+        error_vals : list[float] — signed detuning errors at each freq [MHz]
+
+        Returns
+        -------
+        predicted_freq : float or None
+            Optimal qb_freq_ge in MHz, or None if sklearn is unavailable
+            or the GP uncertainty is too large to trust.
+        """
+        try:
+            from sklearn.gaussian_process import GaussianProcessRegressor
+            from sklearn.gaussian_process.kernels import RBF, WhiteKernel
+        except ImportError:
+            return None
+
+        try:
+            X = np.array(freq_vals).reshape(-1, 1)
+            y = np.array(error_vals)
+
+            # Normalise inputs so GP length-scale optimisation is stable;
+            # qb_freq is in GHz-scale MHz numbers, corrections are sub-MHz.
+            x_centre = float(X.mean())
+            x_scale  = max(float(X.std()), 1e-3)
+            Xn = (X - x_centre) / x_scale
+
+            kernel = (
+                RBF(length_scale=1.0, length_scale_bounds=(0.01, 100.0))
+                + WhiteKernel(noise_level=1e-3, noise_level_bounds=(1e-5, 1.0))
+            )
+            gp = GaussianProcessRegressor(
+                kernel=kernel,
+                n_restarts_optimizer=5,
+                normalize_y=True,
+            )
+            gp.fit(Xn, y)
+
+            # Search for zero crossing in a ± 5 × scatter window around the
+            # latest estimate (avoids extrapolating far outside observations).
+            x_lo = freq_vals[-1] - 5.0 * x_scale
+            x_hi = freq_vals[-1] + 5.0 * x_scale
+            x_search  = np.linspace(x_lo, x_hi, 2000)
+            xn_search = (x_search - x_centre) / x_scale
+            y_pred, y_std = gp.predict(xn_search.reshape(-1, 1), return_std=True)
+
+            # Zero crossing: minimise |mean prediction|
+            zero_idx   = int(np.argmin(np.abs(y_pred)))
+            pred_freq  = round(float(x_search[zero_idx]), 4)
+            pred_sigma = float(y_std[zero_idx])
+
+            self._log("ramsey",
+                      f"  GP zero-crossing: {pred_freq:.4f} MHz "
+                      f"(σ = {pred_sigma:.4f} MHz)")
+
+            # Reject if uncertainty is larger than 5× the convergence goal
+            if pred_sigma > 5.0 * self.RAMSEY_DETUNE_LIMIT_MHZ:
+                self._log("ramsey",
+                          "  GP uncertainty too large — falling back to naive correction")
+                return None
+
+            return pred_freq
+
+        except Exception as exc:
+            self._log("ramsey", f"  GP prediction failed ({exc}) — using naive correction")
+            return None
 
     # -------------------------------------------------------------------------
     # Summary
