@@ -41,24 +41,48 @@ class plotting(object):
         real2 = z_sim_nodelay.real
         imag2 = z_sim_nodelay.imag
         
-        plt.subplot(221)
-        plt.plot(real, imag, label="rawdata")
-        plt.plot(real2, imag2, label="fit")
-        plt.xlabel("Re(S21)")
-        plt.ylabel("Im(S21)")
-        plt.legend()
-        plt.subplot(222)
-        plt.plot(self.f_data * 1e-9, np.absolute(z_raw_nodelay), label="rawdata")  # type: ignore
-        plt.plot(self.f_data * 1e-9, np.absolute(z_sim_nodelay), label="fit")  # type: ignore
-        plt.xlabel("f (GHz)")
-        plt.ylabel("|S21|")
-        plt.legend()
-        plt.subplot(223)
-        plt.plot(self.f_data * 1e-9, np.angle(z_raw_nodelay), label="rawdata")  # type: ignore
-        plt.plot(self.f_data * 1e-9, np.angle(z_sim_nodelay), label="fit")  # type: ignore
-        plt.xlabel("f (GHz)")
-        plt.ylabel("arg(|S21|)")
-        plt.legend()
+        import matplotlib.gridspec as gridspec
+        fig = plt.figure(figsize=(10, 6))
+        gs = gridspec.GridSpec(2, 2)
+        
+        ax_amp = fig.add_subplot(gs[:, 0])
+        ax_iq = fig.add_subplot(gs[0, 1])
+        ax_phase = fig.add_subplot(gs[1, 1])
+        
+        # Plot Amplitude (Left bridging 2 rows)
+        ax_amp.plot(self.f_data * 1e-9, np.absolute(z_raw_nodelay), label="rawdata")  # type: ignore
+        ax_amp.plot(self.f_data * 1e-9, np.absolute(z_sim_nodelay), label="fit")  # type: ignore
+        ax_amp.set_xlabel("f (GHz)")
+        ax_amp.set_ylabel("|S21|")
+        ax_amp.legend()
+
+        # Plot IQ circle (Right Top)
+        ax_iq.plot(real, imag, label="rawdata")
+        ax_iq.plot(real2, imag2, label="fit")
+        # Ensure IQ plot is somewhat square to not distort the circle visualization
+        ax_iq.set_aspect('equal', 'datalim') 
+        ax_iq.set_xlabel("Re(S21)")
+        ax_iq.set_ylabel("Im(S21)")
+        ax_iq.legend()
+        
+        # Plot Phase (Right Bottom)
+        ax_phase.plot(self.f_data * 1e-9, np.angle(z_raw_nodelay), label="rawdata")  # type: ignore
+        ax_phase.plot(self.f_data * 1e-9, np.angle(z_sim_nodelay), label="fit")  # type: ignore
+        ax_phase.set_xlabel("f (GHz)")
+        ax_phase.set_ylabel("arg(|S21|)")
+        ax_phase.legend()
+
+        # Add Title with fit parameters if available
+        if hasattr(self, 'fitresults') and self.fitresults and self.fitresults.get('fr') is not None:
+            fr = self.fitresults.get('fr', 0.0)
+            Ql = self.fitresults.get('Ql', 0.0)
+            Qc = self.fitresults.get('Qc_dia_corr', self.fitresults.get('absQc', self.fitresults.get('Qc', 0.0)))
+            Qi = self.fitresults.get('Qi_dia_corr', self.fitresults.get('Qi', 0.0))
+            kappa = fr / Ql if Ql else 0.0
+            
+            title_str = f"fr = {fr*1e-9:.5f} GHz  |  $\kappa/2\pi$ = {kappa*1e-6:.2f} MHz\nQi = {Qi:.1f}  |  Qc = {Qc:.1f}"
+            fig.suptitle(title_str, fontsize=12)
+
         plt.tight_layout()
         plt.show()
 
