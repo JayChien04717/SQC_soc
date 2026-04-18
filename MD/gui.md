@@ -1,316 +1,349 @@
-# GUI Plan for qick_workspace
+# QICK Qubit Measurement GUI — Product Design Plan
 
-## Tech Stack
-
-**Framework: PySide6 (Qt6)**
-
-- Native desktop app, no browser needed
-- Dockable panels — user can rearrange layout
-- Matplotlib 嵌入：`matplotlib.backends.backend_qtagg.FigureCanvasQTAgg`
-- Threading：`QThread` 跑 acquire，不凍結 UI
-
-**Alternative: Streamlit**（如果想要 browser-based，快速 prototype 用）
-
-- 優點：幾乎不用寫 UI 程式
-- 缺點：難做 live plot 更新、docking 彈性差
-
-**建議：PySide6**，適合長期使用的 lab instrument control GUI。
+**Role context:** This document is written from the dual perspective of a superconducting qubit measurement engineer (who knows what the physics demands) and a product manager (who knows what ships vs. what sinks). Every decision here is grounded in how we actually use the hardware, not in how we wish we used it.
 
 ---
 
-## 視窗佈局
+## 1. Product Goal
 
-主視窗：
+A **single-window desktop application** that lets a lab member go from power-on to a calibrated qubit in one session, without ever touching a terminal or a Jupyter notebook. The output is correct science: reliable fits, properly named HDF5 files, and a qubit parameter set ready for gate experiments.
 
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│  Menu Bar: File | Connection | Tools | Data Browser | Help      │
-├──────────────┬──────────────────────────┬───────────────────────┤
-│              │                          │                       │
-│  [1] Setup   │  [2] Experiment Panel    │  [3] Live Plot        │
-│  Panel       │                          │                       │
-│  ──────────  │  ─────────────────────── │  ─────────────────── │
-│  Connection  │  Experiment Selector     │  matplotlib canvas    │
-│  Config      │  Parameter Form          │  (auto-updates)       │
-│  Qubit Select│  Run Controls            │                       │
-│              │                          │                       │
-├──────────────┴──────────────────────────┴───────────────────────┤
-│  [4] Result Panel                                               │
-│  Fit results  |  IQ scatter  |  Save button  |  Log            │
-├─────────────────────────────────────────────────────────────────┤
-│  [5] Status Bar: Connected | Q2 | Last run: T1=45.3 µs         │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-Data Browser — 獨立 Dock Window（可浮動）：
-
-```text
-┌─────────────────────────────────────────────────────────────────┐
-│  [6] Data Browser                                               │
-├──────────────────────┬──────────────────────────────────────────┤
-│  File List           │  Plot Viewer                             │
-│  ──────────────────  │  ──────────────────────────────────────  │
-│  Filter: [____] [Q▼] │  View: (●mag) (○phase) (○avgi) (○avgq)  │
-│                      │                                          │
-│  ▼ 2024-01-15        │  [matplotlib canvas]                     │
-│    s003_qubit_q2     │                                          │
-│    s008_T1_q2        │                                          │
-│  ▼ 2024-01-14        │                                          │
-│    s002_res_q2       │  ──────────────────────────────────────  │
-│    s006_ramsey_q2    │  Metadata                                │
-│                      │  Experiment: s008_T1_ge                  │
-│  [Open Folder]       │  Qubit: 2                                │
-│  [Refresh]           │  Time: 2024-01-15 10:32                  │
-│                      │  T1 = 45.3 µs                            │
-└──────────────────────┴──────────────────────────────────────────┘
-```
+Secondary goal: the app is **self-documenting** — every run is logged with its parameters, every file is searchable, and no result is silently lost.
 
 ---
 
-## Panel 細節
+## 2. User Persona
 
-### [1] Setup Panel
+| Persona | Description | Pain today |
+|---|---|---|
+| **Lab student** | First year PhD, knows the physics, hates debugging Python imports | Runs the wrong script, wrong config, saves over yesterday's data |
+| **Lab engineer** | Knows the system well, runs 50 experiments a day | Wastes time copy-pasting notebook cells, no live progress |
+| **PI / visitor** | Wants a summary of qubit parameters, not raw IQ data | Has to open a notebook to see T1/T2/frequency |
 
-```text
-[ Connection ]
-  SOC IP:     [_____________] [Connect]
-  Status:     ● Connected / ✗ Disconnected
-
-[ Config ]
-  Config file: [__path__] [Browse] [Load] [Save]
-  Data path:   [__path__] [Browse]
-
-[ Qubit Select ]
-  Active qubit: ( Q0 ) ( Q1 ) ( Q2 ) ( Q3 )
-  Yoko value:   [____] mA
-```
-
-對應程式：
-
-- `BaseExperiment.setup(soc, soccfg, data_path)`
-- `ExperimentConfig` load/save YAML
+Primary target: **lab engineer**. If the engineer is happy, the student can follow, and the PI gets their summary.
 
 ---
 
-### [2] Experiment Panel
+## 3. What the App Must Do (Core — non-negotiable)
 
-```text
-[ Experiment ]
-  Category: [ GE ▼ ]   Experiment: [ Qubit Spec ▼ ]
+### 3.1 Hardware Panel
+- Connect via Pyro4 `make_proxy(ns_host, ns_port, proxy_name)` → real `soc, soccfg`
+- Show board info (first 6 lines of `str(soccfg)`) in log after connect
+- Call `BaseExperiment.setup(soc, soccfg, data_path)` immediately
+- LED: orange = disconnected, yellow = connecting, green = connected
+- Disconnect button that cleanly releases the proxy
+- **Fields:** NS host, NS port (default 8888), proxy name (default "myqick")
 
-  ┌─ Parameters ──────────────────────────┐
-  │  py_avg       [  10  ]                │
-  │  reps         [ 1000 ]                │
-  │  relax_delay  [  50  ] µs             │
-  │  span         [  50  ] MHz            │
-  │  steps        [ 100  ]                │
-  │  ...（根據實驗動態生成欄位）            │
-  └───────────────────────────────────────┘
+### 3.2 Configuration Panel
+- Load a YAML config file (browse + drag-drop)
+- Parse with `ExperimentConfig(config_list)` into `config_all`
+- Show parsed qubit list (Q0, Q1, Q2 …) as radio buttons or tab selector
+- Active qubit selection drives `config_all.get_qubit("Q{n}")` for all runs
+- Save current parameter edits back to YAML
+- Data path field: where HDF5 files go (persisted in QSettings)
 
-  [ ▶ Run ]  [ ■ Stop ]  [ ↺ Repeat ]
-  [ Save ]   [ Load params ]
-```
+### 3.3 Experiment Execution Panel
+- Category + experiment combo (current registry is correct)
+- Parameter form: common params (py_avg, reps, relax_delay, steps, span) + experiment-specific overrides
+- **Run** (Ctrl+R) → `AcquireWorker` thread → real experiment class → `.run()` → `.saveLabber()`
+- **Stop** (Esc) → `worker.terminate()` + graceful cleanup
+- Live progress: indeterminate spinner while running, "Ready" when done
+- State label: "● Running QubitSpec…" with experiment name
 
-**Experiment 分類（Category 下拉）：**
+### 3.4 Live Plot Panel
+- matplotlib canvas, dark theme, NavigationToolbar
+- Channel selector: mag / phase / avgi / avgq
+- **Auto-update every sweep point** (not just at the end) — requires `data_ready` signal emitted per-point in worker
+- Autoscale checkbox
+- Export button (PNG/PDF/SVG)
+- Clear button
 
-| Category | 實驗 |
-| --- | --- |
-| Setup | Time of Flight |
-| Resonator | Res Spec GE, Punchout, Flux Spec |
-| Qubit GE | Qubit Spec, Flux Spec, Time Rabi, Power Rabi, DRAG, AAE |
-| Coherence | Ramsey, Spin Echo, T1 |
-| Qubit EF | Res Spec EF, Qubit Spec EF, Power Rabi EF, Ramsey EF, T1 EF |
-| Advanced | AllXY, SingleShot Opt, Qubit Temp, AC Stark |
-| RB | Single Qubit RB, IRB, Auto RB, ASM RB |
-| Tomography | State Tomography |
-| Auto | AutoCalibrate |
+### 3.5 Log Panel
+- Timestamped, color-coded (info=grey, success=green, warn=orange, error=red)
+- Shows: connection events, experiment start/stop, fit results, save paths, errors
+- 500-line rolling buffer
+- "Clear Log" menu item
 
-參數欄位從各 experiment class 的 `__init__` 預設值動態生成。
-
----
-
-### [3] Live Plot Panel
-
-```text
-┌─────────────────────────────────────┐
-│  [matplotlib figure]                │
-│                                     │
-│  Qubit Spec Q2                      │
-│  ●●●●●●●●● (live updating)         │
-│                                     │
-│  Controls: [IQ: abs▼] [Autoscale☑] │
-└─────────────────────────────────────┘
-```
-
-- 呼叫現有的 `liveplot.py` 更新函式
-- IQ 選擇：abs / real / imag / IQ scatter
-- 每次 acquire 結束後觸發 `_post_fit` 並更新 fit curve
+### 3.6 Data Browser (separate process, Ctrl+B)
+- Tree: date → file list with (name, size, timestamp)
+- File count per date shown in tree
+- Preview on selection: auto-detect 1D or 2D, plot accordingly
+- Plot modes: Scatter 1D, Imshow 2D, Hist 1D (with KDE), Hist 2D (IQ cloud)
+- Channel selector: avgi / avgq / mag / phase
+- Export plot button (Ctrl+S)
+- Delete file with confirmation (Del key)
+- Keyboard shortcuts: F5 refresh, Del delete, Ctrl+S export
+- Independent QProcess — browser stays open if measurement window crashes
 
 ---
 
-### [4] Result Panel
+## 4. What the App Should Do (Important — high value, not blocking v1)
 
-```text
-┌─ Fit Results ──────────┬─ IQ Scatter ─┬─ Log ──────────────────┐
-│  f_ge:  5234.12 MHz    │              │ [10:32] Qubit Spec done │
-│  T1:    45.3 µs        │  [scatter]   │ [10:31] Run started     │
-│  T2:    88.1 µs        │              │ [10:30] Config loaded   │
-│  EPC:   0.012%         │              │                         │
-│                        │              │                         │
-│  [→ Update Config]     │              │  [Clear]                │
-└────────────────────────┴──────────────┴─────────────────────────┘
-```
+### 4.1 Qubit Parameter Dashboard
+A persistent panel (or tab) showing the current "known good" values for the active qubit:
+- `f_ge`, `f_ef`, `T1`, `T2*`, `T2_echo`
+- `pi_gain`, `pi_half_gain`, `pi_ef_gain`
+- `resonator_freq`, `readout_length`, `adc_trig_offset`
+- Values are populated by fit results after each experiment, stored in a per-qubit dict in memory
+- "Copy to clipboard as YAML" button so the user can paste into their config
 
-**「Update Config」按鈕**：把 fit 結果直接寫回 `ExperimentConfig`（f_ge、pi_gain 等）。
+**Why important:** Right now these values live scattered across notebook outputs. A running tally is essential for a productive calibration session.
 
----
+### 4.2 Calibration Sequence Runner
+A "one-click calibration" wizard that runs a fixed sequence:
+1. Time of Flight → sets `adc_trig_offset`
+2. Res Spec GE → finds `resonator_freq`
+3. Qubit Spec GE → finds `f_ge`
+4. Power Rabi → sets `pi_gain`
+5. T1 → measures T1
+6. Ramsey → measures T2*, corrects `f_ge`
 
-### [5] Auto Calibrate Panel（獨立 Dialog）
+Each step: auto-fits, writes result to the parameter dashboard, proceeds to next. Pause/resume. Skip individual steps. **This is the killer feature** for daily calibration.
 
-```text
-[ Auto Calibrate ]
+### 4.3 Experiment-Specific Parameter Injection
+When an experiment is selected, load the recommended parameters for the current qubit from the YAML config automatically — not just the generic `_COMMON_PARAMS` defaults. Example: selecting "Time Rabi" should pre-fill `start`, `stop`, `step` from `cfg["time_rabi"]` in the config.
 
-  Steps to run:
-  ☑ Res Spec        ☑ Qubit Spec
-  ☑ Power Rabi      ☑ Ramsey
-  ☑ Spin Echo       ☑ T1
-  ☑ SingleShot Opt
+### 4.4 Fit Results Overlay on Plot
+After each experiment, if a fitter exists (e.g., `_post_fit` in the experiment class), overlay the fit curve on the live plot and annotate the extracted value (e.g., "f_ge = 4.821 GHz", "T1 = 42 µs"). This is already partially implemented in `base_experiment.py`.
 
-  Skip steps: [____________]
-
-  [ ▶ Start AutoCal ]  [ ■ Stop ]
-
-  Progress:
-  ████████░░  Step 4/7: Ramsey
-  Status: GP predicting zero crossing...
-```
-
-對應 `AutoCalibrate.run(skip=(...))` + `AutoCalibrate.summary()`。
+### 4.5 Yokogawa Flux Bias Control
+- Current field (mA) → `yoko.set_current(mA)` via a driver
+- Sweep mode: set a range, run an experiment at each flux point (for flux-tunable qubits)
+- Live 2D map: x = flux, y = frequency sweep, color = mag
 
 ---
 
-### [6] Data Browser（獨立 Dock）
+## 5. What the App Might Do (Lower Priority — defer unless easy)
 
-由 `tools/data_manager.py` 驅動，完全不依賴 Labber。
+### 5.1 Multi-Qubit Support
+Running the same experiment on Q0…Q3 in sequence, comparing results side-by-side. Not needed until multi-qubit gate experiments start. The current radio-button qubit selector is sufficient.
 
-#### File List（左欄）
+### 5.2 Automated Report Generation
+After a calibration session, export a PDF summary with all fit results and plots. Nice for the PI, but can be done in a notebook for now.
 
-- `list_data_files(directory)` 掃描資料夾，依日期分組顯示
-- Filter bar：關鍵字搜尋 + 按 Qubit 篩選
-- 雙擊載入：呼叫 `load_data(path)` 讀取 `.h5`
-- `[Open Folder]` 切換資料夾，`[Refresh]` 重新掃描
+### 5.3 Remote Monitoring
+A web dashboard (Flask + Plotly Dash) that shows live experiment state from another machine. Useful for noisy lab environments where you don't want to be physically at the computer. Defer — adds significant complexity.
 
-#### Plot Viewer（右欄）
+### 5.4 Experiment Scheduling
+A queue system: submit multiple experiments, run overnight. Useful for long T1 sweeps or RB sequences. Not needed until the core loop is reliable.
 
-Radio button 切換顯示頻道：
+### 5.5 Parameter History / Version Control
+Track how `f_ge` changed over the past week. Interesting science, but a CSV log + notebook is good enough for now.
 
-| 選項 | 資料來源 | 說明 |
-| --- | --- | --- |
-| **mag** | `data["mag"]` | `sqrt(I² + Q²)`，預設 |
-| **phase** | `data["phase"]` | `arctan2(Q, I)`，單位 deg |
-| **avgi** | `data["avgi"]` | I 分量 |
-| **avgq** | `data["avgq"]` | Q 分量 |
+---
 
-- 1D 實驗：折線圖，x 軸從 `data["x"]`
-- 2D 實驗：colormap，x/y 軸從 `data["x"]` / `data["y"]`
-- 切換頻道時只換 y 資料，不重新載入檔案
+## 6. What the App Will NOT Do (Explicitly Cut)
 
-#### Metadata 區（右下）
+| Feature | Why cut |
+|---|---|
+| Cloud sync / remote storage | Lab instruments are air-gapped or firewalled; adds security risk |
+| Multi-user login | One person controls the instrument at a time; no conflict |
+| In-app notebook editor | That's what Jupyter is for; don't rebuild it |
+| Real-time collaboration | Complexity far exceeds the benefit in a 3-person lab |
+| Waveform editor / pulse designer | QICK firmware handles this; expose via config YAML only |
+| Drag-and-drop experiment ordering in tree | The calibration sequence covers 95% of ordering needs |
+| Theming / color customization | One dark theme. Period. |
+| Plugin system / extensibility framework | Over-engineering; new experiments = new Python file + one registry entry |
 
-顯示 HDF5 root attrs：experiment、qubit、timestamp、fit 結果（若有存入 config）。
+---
 
-#### Save 整合
+## 7. UI Layout
 
-Result Panel 的 **Save** 按鈕呼叫：
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  Menu: File | Tools | Help                                          │
+├──────────────┬──────────────────────────────────┬──────────────────┤
+│  SETUP       │         LIVE PLOT                │  EXPERIMENT      │
+│  ─────────   │                                  │  ──────────      │
+│  Connection  │   matplotlib canvas              │  Category        │
+│    NS host   │   (dark, autoscale)              │  Experiment      │
+│    Port      │                                  │  ──────────      │
+│    Name      │   [Channel▼] [✓Autoscale]        │  Parameters      │
+│    [Connect] │   [Clear] [Export…]              │  (scrollable     │
+│    ● status  │                                  │   form)          │
+│  ─────────   │   NavToolbar                     │  ──────────      │
+│  Config      │                                  │  ● Idle          │
+│    YAML path │                                  │  [▶ Run] [■ Stop]│
+│    [Load]    │                                  │  [Save]          │
+│    [Save]    │                                  │                  │
+│    Data path │                                  │  QUBIT PARAMS    │
+│  ─────────   │                                  │  ──────────      │
+│  Qubit       │                                  │  f_ge: –         │
+│    Q0 Q1 Q2  │                                  │  T1:   –         │
+│    Q3        │                                  │  T2*:  –         │
+│    Yoko(mA)  │                                  │  π gain: –       │
+│              │                                  │  [Copy YAML]     │
+├──────────────┴──────────────────────────────────┴──────────────────┤
+│  LOG   [HH:MM:SS] message …                                 [Clear] │
+└─────────────────────────────────────────────────────────────────────┘
+  ● Connected  |  Q1  |  Ready                          [████░░░░░░]
+```
+
+**Key layout decisions:**
+- Setup left, Experiment right — mirrors how you think: "am I connected?" → "what am I running?"
+- Qubit Parameters below Experiment — naturally fills with data as calibration progresses
+- Log at bottom, always visible — errors must never be hidden
+- Central plot fills remaining space — this is the primary output
+- Status bar carries only: connection LED, active qubit, state label, progress bar
+
+---
+
+## 8. Data Model
+
+### HDF5 file structure (already established in `hdf5_generator`)
+```
+/{EXPT_NAME}_{qubit}_{NNN}.h5
+  /x             — 1D sweep axis (float64)
+  /y             — 2D sweep axis if applicable (float64)
+  /data/
+    avgi         — I quadrature (float64, shape [reps] or [Ny, Nx])
+    avgq         — Q quadrature
+    mag          — |IQ|
+    phase        — angle(IQ) in degrees
+  /config        — serialized YAML config as string attribute
+  /meta
+    .attrs["expt_name"]    — "s003_qubit_spec_ge"
+    .attrs["qubit"]        — "Q1"
+    .attrs["timestamp"]    — ISO8601
+    .attrs["py_avg"]       — int
+    .attrs["fit_result"]   — JSON string of fit outputs (f_ge, T1, etc.)
+```
+
+`/meta/fit_result` is the key addition — fits are stored in the file, not just plotted. This is what feeds the Qubit Parameter Dashboard in §4.1.
+
+### Qubit state dict (in memory, lost on close — intentional)
+```python
+qubit_state: dict[str, dict] = {
+    "Q0": {"f_ge": 4.821e9, "T1": 42e-6, "pi_gain": 14200, ...},
+    "Q1": {...},
+}
+```
+Populated by fit hooks. "Copy to YAML" serializes it. No database.
+
+---
+
+## 9. AcquireWorker — Real Implementation Contract
+
+The current `AcquireWorker.run()` is a stub. The real implementation must:
 
 ```python
-from qick_workspace.tools.data_manager import save_data
+def run(self):
+    try:
+        # 1. Import the experiment class
+        mod_name, cls_name = self.class_path.rsplit(".", 1)
+        mod = importlib.import_module(f"qick_workspace.scrip.{mod_name}")
+        ExptClass = getattr(mod, cls_name)
 
-save_data(expt, qb_idx=2, config_all=cfg)
-# 存成 DATA_PATH/s003_qubit_spec_q2_001.h5
+        # 2. Build run config from active qubit config
+        run_cfg = self.config_all.get_qubit(self.qubit_label)
+        run_cfg.update(self.params)          # GUI overrides
+
+        # 3. Instantiate and run
+        expt = ExptClass(run_cfg)
+        # Emit per-point updates via a progress callback if the class supports it
+        expt.run(py_avg=self.params["py_avg"])
+
+        # 4. Emit data for live plot
+        self.data_ready.emit(expt._sweep_vals_x, expt.iqdata,
+                             ExptClass.X_LABEL, ExptClass.TITLE_PREFIX)
+
+        # 5. Save
+        expt.saveLabber(self.qubit_label, config_all=self.config_all)
+
+        # 6. Emit fit results if available
+        if hasattr(expt, "fit_result"):
+            self.fit_ready.emit(self.qubit_label, expt.fit_result)
+
+        self.log_message.emit("Done.", "success")
+    except Exception as exc:
+        self.log_message.emit(f"Error: {exc}", "error")
+    finally:
+        self.finished.emit()
 ```
 
-HDF5 格式（純 h5py，無 Labber 依賴）：
+`AcquireWorker` needs these constructor parameters added:
+- `config_all` — the `ExperimentConfig` object (set after YAML load)
+- `qubit_label` — "Q0", "Q1", etc. (from active qubit radio button)
 
-```text
-/
-├── attrs: experiment, qubit, timestamp, tag, config (JSON)
-├── x/    values, attrs: name, unit
-├── y/    values, attrs: name, unit   (2D only)
-└── data/
-    ├── avgi   float32
-    ├── avgq   float32
-    ├── mag    float32
-    └── phase  float32 (degrees)
-```
+New signal: `fit_ready = Signal(str, dict)` — carries qubit label + fit dict → updates Parameter Dashboard.
 
 ---
 
-## 資料流
+## 10. What Is Broken or Missing Right Now
 
-```text
-UI 操作
-  │
-  ▼
-QThread（背景執行）
-  │  呼叫 ExperimentClass.run() / prog.acquire()
-  │
-  ├─► 每 rep 發 signal → Live Plot 更新
-  │
-  └─► 完成後發 signal → Result Panel 更新 + Fit
-                      → save_data() → .h5 檔案
-                      → Data Browser 自動 Refresh
-```
-
-`QThread` 確保 acquire 不凍結 UI，Stop 按鈕透過 event flag 中斷。
+| Issue | Severity | Fix |
+|---|---|---|
+| `AcquireWorker.run()` is a stub — no real experiment runs | **Critical** | Implement per §9 |
+| No `config_all` passed to worker — qubit config never used | **Critical** | Pass after YAML load |
+| Experiment-specific params not loaded from config | High | Load from `run_cfg` on experiment select |
+| No fit results displayed or stored | High | Hook `fit_ready` signal to dashboard + HDF5 |
+| `_COMMON_PARAMS` are generic defaults, not qubit-aware | High | Override from loaded config |
+| `Save Config` button is unimplemented | Medium | `config_to_yaml()` call |
+| `_on_save` in main_window is a log stub | Medium | Call `expt.saveLabber()` explicitly or confirm auto-save |
+| Data browser launched as script path — breaks if CWD changes | Medium | Use `sys.executable -m gui.data_browser_app` |
+| No Qubit Parameter Dashboard | Medium | Add to right panel below Experiment |
+| Yoko driver not wired — spin box does nothing | Low | Wire after hardware confirmed present |
 
 ---
 
-## 檔案結構（建議）
+## 11. Development Phases
 
-```text
-gui/
-├── main.py                  # 入口，建立 QApplication + MainWindow
-├── main_window.py           # 主視窗，管理 dock panels
-├── panels/
-│   ├── setup_panel.py       # [1] Connection + Config
-│   ├── experiment_panel.py  # [2] Experiment selector + params form
-│   ├── plot_panel.py        # [3] Matplotlib canvas
-│   ├── result_panel.py      # [4] Fit results + log
-│   └── data_browser.py      # [6] Data browser dock
-├── dialogs/
-│   └── autocal_dialog.py    # Auto Calibrate dialog
-├── workers/
-│   └── acquire_worker.py    # QThread wrapper for acquire
-└── utils/
-    ├── param_form.py        # 動態生成參數欄位
-    └── config_bridge.py     # ExperimentConfig ↔ GUI 雙向同步
-```
+### Phase 1 — Make It Actually Run Experiments (1–2 weeks)
+1. Wire `AcquireWorker` to real experiment classes (§9)
+2. Pass `config_all` through the signal chain: YAML load → SetupPanel → MainWindow → Worker
+3. Emit `data_ready` per sweep point (not just at end) — requires a liveplot callback in `BaseExperiment`
+4. Implement `fit_ready` signal → log the fit result string
 
----
+Deliverable: Can run QubitSpec, see live sweep, get T1 fit result in log.
 
-## 實作優先順序
+### Phase 2 — Parameter Integrity (1 week)
+5. Load experiment-specific params from `run_cfg` when experiment is selected
+6. Implement "Save Config" button → `config_to_yaml()`
+7. Write fit results into HDF5 `/meta/fit_result` attribute
 
-| Priority | 功能 |
-| --- | --- |
-| P0 | Connection + Config 載入 |
-| P0 | Experiment 選擇 + 靜態參數表單 |
-| P0 | Run → acquire → 顯示結果圖 |
-| P1 | Live plot 更新（QThread signal） |
-| P1 | Fit 結果顯示 + Update Config 按鈕 |
-| P1 | save_data() + Data Browser（File List + Plot Viewer） |
-| P2 | Data Browser mag/phase/avgi/avgq 切換 |
-| P2 | Auto Calibrate dialog |
-| P2 | Yoko 控制 |
-| P3 | RB / Tomography 頁面 |
-| P3 | 完整 Log |
+Deliverable: Parameters are always correct and persisted.
+
+### Phase 3 — Qubit Parameter Dashboard (1 week)
+8. Add `QubitParamsPanel` to right dock below Experiment
+9. Connect `fit_ready` signal → update dashboard fields
+10. "Copy YAML" button
+
+Deliverable: Running calibration session produces a live summary.
+
+### Phase 4 — Calibration Sequence Runner (2 weeks)
+11. `CalibrationWizard` dialog: ordered step list, checkboxes to skip
+12. Runs steps sequentially, auto-populates config from each fit result
+13. Pause / resume / re-run single step
+
+Deliverable: Daily calibration in one click.
+
+### Phase 5 — Polish (ongoing)
+- Keyboard shortcut help overlay (press ?)
+- Parameter tooltips showing units and typical ranges
+- "What changed?" diff when loading a new config
+- File drag-drop onto data browser tree
 
 ---
 
-## 依賴套件
+## 12. What Stays Simple On Purpose
 
-```text
-pip install PySide6 matplotlib numpy h5py
-```
+- **One config file at a time.** No project system, no config history. Open YAML → run → done.
+- **No undo.** Experiment parameters are ephemeral; config is a file you can version with git.
+- **No in-app fitting controls.** Fits run automatically via `_post_fit`. If the fit fails, re-run with better parameters.
+- **No custom color themes.** The dark theme is chosen for low-light lab environments. One theme, no settings page.
+- **No tooltips on every widget.** Only where the value is non-obvious (e.g., `adc_trig_offset`, not `reps`).
+- **Subprocess for data browser.** Not a tab, not a panel. Separate process = independent crash domain.
 
-qick_workspace 本身的 import 路徑不變，GUI 只是在外層包一個 Qt 殼。
+---
+
+## 13. Success Criteria
+
+The GUI is "done" when a lab member can:
+
+1. Open the app, connect to the QICK board, load a config — in under 30 seconds
+2. Run Time of Flight → Res Spec → Qubit Spec → Power Rabi → T1 without touching the terminal
+3. See live sweep data updating during each run
+4. Find yesterday's T1 file in the data browser and export the plot
+5. Copy the current qubit parameters as YAML and paste them into a new config
+
+If all five work reliably, the app is production-ready for a superconducting qubit lab.
