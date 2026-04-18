@@ -17,10 +17,10 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QTreeWidget, QTreeWidgetItem,
     QLabel, QLineEdit, QPushButton, QComboBox,
     QButtonGroup, QRadioButton, QGroupBox,
-    QTextEdit, QTabWidget, QFileDialog, QSizePolicy,
+    QTextEdit, QTabWidget, QFileDialog, QSizePolicy, QMessageBox,
 )
-from PySide6.QtCore import Qt, QSize
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt, QSize, QSettings
+from PySide6.QtGui import QFont, QKeySequence, QShortcut
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavToolbar
 from matplotlib.figure import Figure
@@ -40,11 +40,14 @@ class DataBrowserWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Data Browser")
+        self.setWindowTitle("Data Browser  ·  qick_workspace")
         self.resize(1400, 900)
         self._current_data = None
+        self._current_path = None
         self._all_files    = []
         self._build_ui()
+        self._setup_shortcuts()
+        self._restore_geometry()
 
     # ── UI ────────────────────────────────────────────────────────────────────
 
@@ -101,10 +104,18 @@ class DataBrowserWindow(QMainWindow):
         self.tree.itemClicked.connect(self._on_item_clicked)
         lay.addWidget(self.tree)
 
-        # Refresh
+        # Refresh + Delete row
+        action_row = QHBoxLayout()
         refresh_btn = QPushButton("Refresh")
+        refresh_btn.setToolTip("Re-scan the folder  (F5)")
         refresh_btn.clicked.connect(self._refresh)
-        lay.addWidget(refresh_btn)
+        action_row.addWidget(refresh_btn)
+        self._del_btn = QPushButton("Delete")
+        self._del_btn.setToolTip("Delete the selected file  (Del)")
+        self._del_btn.setEnabled(False)
+        self._del_btn.clicked.connect(self._delete_current)
+        action_row.addWidget(self._del_btn)
+        lay.addLayout(action_row)
         return w
 
     # ── Right panel: plot + info tabs ─────────────────────────────────────────
@@ -114,13 +125,13 @@ class DataBrowserWindow(QMainWindow):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(4, 4, 4, 4)
 
-        # Channel selector
+        # Controls row: channel + plot type
         ch_row = QHBoxLayout()
         ch_row.addWidget(QLabel("Channel:"))
         self._ch_bg = QButtonGroup(self)
         for i, ch in enumerate(["mag", "phase", "avgi", "avgq"]):
             rb = QRadioButton(ch)
-            rb.setFixedWidth(70)
+            rb.setFixedWidth(66)
             if i == 0:
                 rb.setChecked(True)
             self._ch_bg.addButton(rb, i)
@@ -128,7 +139,18 @@ class DataBrowserWindow(QMainWindow):
         self._ch_bg.idToggled.connect(
             lambda _id, checked: self._replot() if checked else None
         )
-        ch_row.addStretch()
+        ch_row.addSpacing(16)
+        ch_row.addWidget(QLabel("Plot:"))
+        self._plot_type = QComboBox()
+        self._plot_type.addItems(["Scatter", "Hist 1D", "Hist 2D"])
+        self._plot_type.setFixedWidth(90)
+        self._plot_type.currentTextChanged.connect(lambda _: self._replot())
+        ch_row.addWidget(self._plot_type)
+        export_btn = QPushButton("Export…")
+        export_btn.setFixedWidth(72)
+        export_btn.setToolTip("Save figure as PNG / PDF / SVG  (Ctrl+S)")
+        export_btn.clicked.connect(self._export_figure)
+        ch_row.addWidget(export_btn)
         lay.addLayout(ch_row)
 
         # Matplotlib canvas + toolbar
@@ -189,7 +211,7 @@ class DataBrowserWindow(QMainWindow):
             grouped.setdefault(date, []).append(f)
 
         for date, items in sorted(grouped.items(), reverse=True):
-            parent = QTreeWidgetItem(self.tree, [date, ""])
+            parent = QTreeWidgetItem(self.tree, [date, f"{len(items)} files"])
             parent.setExpanded(True)
             for f in items:
                 child = QTreeWidgetItem(parent, [
@@ -211,8 +233,51 @@ class DataBrowserWindow(QMainWindow):
     def _on_item_clicked(self, item, _col):
         path = item.data(0, Qt.UserRole)
         if not path or not os.path.isfile(path):
+            self._del_btn.setEnabled(False)
             return
+        self._current_path = path
+        self._del_btn.setEnabled(True)
         self._load_file(path)
+
+    def _delete_current(self):
+        if not self._current_path or not os.path.isfile(self._current_path):
+            return
+        name = os.path.basename(self._current_path)
+        reply = QMessageBox.question(
+            self, "Delete file",
+            f"Permanently delete:\n{name}?",
+            QMessageBox.Yes | QMessageBox.Cancel,
+        )
+        if reply == QMessageBox.Yes:
+            os.remove(self._current_path)
+            self._current_path = None
+            self._current_data = None
+            self._del_btn.setEnabled(False)
+            self._refresh()
+
+    def _export_figure(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Figure", "figure",
+            "PNG (*.png);;PDF (*.pdf);;SVG (*.svg);;All files (*)")
+        if path:
+            self.fig.savefig(path, dpi=150, facecolor=BG0)
+            self.statusBar().showMessage(f"Saved → {path}")
+
+    def _setup_shortcuts(self):
+        QShortcut(QKeySequence("F5"),     self, self._refresh)
+        QShortcut(QKeySequence("Delete"), self, self._delete_current)
+        QShortcut(QKeySequence("Ctrl+S"), self, self._export_figure)
+
+    def _restore_geometry(self):
+        s = QSettings("qick_workspace", "DataBrowser")
+        geom = s.value("geometry")
+        if geom:
+            self.restoreGeometry(geom)
+
+    def closeEvent(self, event):
+        s = QSettings("qick_workspace", "DataBrowser")
+        s.setValue("geometry", self.saveGeometry())
+        super().closeEvent(event)
 
     # ── Data loading & display ────────────────────────────────────────────────
 
@@ -277,11 +342,12 @@ class DataBrowserWindow(QMainWindow):
     def _replot(self):
         if self._current_data is None:
             return
-        d   = self._current_data
-        cid = self._ch_bg.checkedId()
-        ch  = ["mag", "phase", "avgi", "avgq"][cid]
-        y   = d[ch]
-        x   = d["x"]["values"]
+        d        = self._current_data
+        cid      = self._ch_bg.checkedId()
+        ch       = ["mag", "phase", "avgi", "avgq"][cid]
+        y        = d[ch]
+        x        = d["x"]["values"]
+        ptype    = self._plot_type.currentText()
         ylabel_map = {
             "mag":   "|IQ| (ADC)",
             "phase": "Phase (deg)",
@@ -289,37 +355,84 @@ class DataBrowserWindow(QMainWindow):
             "avgq":  "Q (ADC)",
         }
 
-        # Always rebuild the figure cleanly to avoid colorbar layout pollution
+        # Rebuild figure cleanly every time to avoid colorbar / axis pollution
         self.fig.clear()
         self.fig.patch.set_facecolor(BG0)
         self.ax = self.fig.add_subplot(111)
         self._style_ax(self.ax)
 
-        is_2d = d["y"] is not None and y.ndim == 2
+        is_2d_data = d["y"] is not None and y.ndim == 2
 
-        if is_2d:
-            yv = d["y"]["values"]
-            xc = np.concatenate([[x[0] - (x[1]-x[0])/2],
-                                  (x[:-1] + x[1:]) / 2,
-                                  [x[-1] + (x[-1]-x[-2])/2]])
-            yc = np.concatenate([[yv[0] - (yv[1]-yv[0])/2],
-                                  (yv[:-1] + yv[1:]) / 2,
-                                  [yv[-1] + (yv[-1]-yv[-2])/2]])
-            pcm = self.ax.pcolormesh(xc, yc, y, cmap="RdBu_r", shading="flat")
-            cbar = self.fig.colorbar(pcm, ax=self.ax, pad=0.02, label=ylabel_map[ch])
+        # ── Hist 2D (IQ plane density) ────────────────────────────────────────
+        if ptype == "Hist 2D":
+            avgi = d["avgi"].ravel()
+            avgq = d["avgq"].ravel()
+            bins = min(120, max(30, int(np.sqrt(avgi.size) * 1.5)))
+            _, _, _, img = self.ax.hist2d(
+                avgi, avgq, bins=bins, cmap="inferno",
+                density=True,
+            )
+            cbar = self.fig.colorbar(img, ax=self.ax, pad=0.02)
+            cbar.set_label("Density", color=TEXT_DIM)
             cbar.ax.yaxis.set_tick_params(color=TEXT_DIM, labelcolor=TEXT_DIM)
-            cbar.set_label(ylabel_map[ch], color=TEXT_DIM)
-            self.ax.set_xlabel(f"{d['x']['name']} ({d['x']['unit']})")
-            self.ax.set_ylabel(f"{d['y']['name']} ({d['y']['unit']})")
-        else:
-            self.ax.plot(x, y.ravel(), ".-", color=ACCENT, markersize=4, linewidth=1.2)
-            self.ax.set_xlabel(f"{d['x']['name']} ({d['x']['unit']})")
-            self.ax.set_ylabel(ylabel_map[ch])
+            self.ax.set_xlabel("I (ADC)")
+            self.ax.set_ylabel("Q (ADC)")
+            self.ax.set_title(
+                f"{d['experiment']}  Q{d['qubit']}  —  IQ histogram",
+                fontsize=10,
+            )
 
-        self.ax.set_title(
-            f"{d['experiment']}  Q{d['qubit']}  —  {ch}",
-            fontsize=10,
-        )
+        # ── Hist 1D (selected channel) ────────────────────────────────────────
+        elif ptype == "Hist 1D":
+            vals = y.ravel()
+            bins = min(120, max(30, int(np.sqrt(vals.size) * 2)))
+            n, edges, patches = self.ax.hist(
+                vals, bins=bins,
+                color=ACCENT, alpha=0.85, edgecolor=BG0, linewidth=0.4,
+            )
+            # Overlay a subtle KDE
+            try:
+                from scipy.stats import gaussian_kde
+                kde_x = np.linspace(edges[0], edges[-1], 300)
+                kde = gaussian_kde(vals)
+                scale = n.max() / kde(kde_x).max()
+                self.ax.plot(kde_x, kde(kde_x) * scale,
+                             color=TEXT, linewidth=1.2, zorder=5)
+            except ImportError:
+                pass
+            self.ax.set_xlabel(ylabel_map[ch])
+            self.ax.set_ylabel("Counts")
+            self.ax.set_title(
+                f"{d['experiment']}  Q{d['qubit']}  —  {ch} histogram",
+                fontsize=10,
+            )
+
+        # ── Scatter / line (default) ──────────────────────────────────────────
+        else:
+            if is_2d_data:
+                yv = d["y"]["values"]
+                xc = np.concatenate([[x[0]  - (x[1] -x[0] )/2],
+                                      (x[:-1]  + x[1:] ) / 2,
+                                      [x[-1]  + (x[-1] -x[-2] )/2]])
+                yc = np.concatenate([[yv[0] - (yv[1]-yv[0])/2],
+                                      (yv[:-1] + yv[1:]) / 2,
+                                      [yv[-1] + (yv[-1]-yv[-2])/2]])
+                pcm = self.ax.pcolormesh(xc, yc, y, cmap="RdBu_r", shading="flat")
+                cbar = self.fig.colorbar(pcm, ax=self.ax, pad=0.02)
+                cbar.set_label(ylabel_map[ch], color=TEXT_DIM)
+                cbar.ax.yaxis.set_tick_params(color=TEXT_DIM, labelcolor=TEXT_DIM)
+                self.ax.set_xlabel(f"{d['x']['name']} ({d['x']['unit']})")
+                self.ax.set_ylabel(f"{d['y']['name']} ({d['y']['unit']})")
+            else:
+                self.ax.plot(x, y.ravel(), ".-", color=ACCENT,
+                             markersize=4, linewidth=1.2)
+                self.ax.set_xlabel(f"{d['x']['name']} ({d['x']['unit']})")
+                self.ax.set_ylabel(ylabel_map[ch])
+            self.ax.set_title(
+                f"{d['experiment']}  Q{d['qubit']}  —  {ch}",
+                fontsize=10,
+            )
+
         self.fig.tight_layout()
         self.canvas.draw_idle()
 
