@@ -9,15 +9,13 @@ from PySide6.QtCore import Signal
 class SetupPanel(QWidget):
     """[1] Connection, config file, and qubit selector."""
 
-    connection_changed = Signal(bool)   # True = connected
+    connection_changed = Signal(bool)
     qubit_changed      = Signal(int)
-    config_loaded      = Signal(str)    # emits file path
+    config_loaded      = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._build_ui()
-
-    # ── UI ────────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
         root = QVBoxLayout(self)
@@ -30,18 +28,15 @@ class SetupPanel(QWidget):
     def _connection_group(self):
         grp = QGroupBox("Connection")
         lay = QVBoxLayout(grp)
-
         row = QHBoxLayout()
         row.addWidget(QLabel("SOC IP:"))
         self.ip_edit = QLineEdit("192.168.1.1")
         row.addWidget(self.ip_edit)
         lay.addLayout(row)
-
         self.connect_btn = QPushButton("Connect")
         self.connect_btn.setCheckable(True)
         self.connect_btn.clicked.connect(self._on_connect)
         lay.addWidget(self.connect_btn)
-
         self.status_label = QLabel("● Disconnected")
         self.status_label.setStyleSheet("color: red;")
         lay.addWidget(self.status_label)
@@ -50,7 +45,6 @@ class SetupPanel(QWidget):
     def _config_group(self):
         grp = QGroupBox("Config")
         lay = QVBoxLayout(grp)
-
         row = QHBoxLayout()
         self.config_path = QLineEdit()
         self.config_path.setPlaceholderText("config.yaml")
@@ -59,7 +53,6 @@ class SetupPanel(QWidget):
         browse_btn.clicked.connect(self._browse_config)
         row.addWidget(browse_btn)
         lay.addLayout(row)
-
         row2 = QHBoxLayout()
         load_btn = QPushButton("Load")
         load_btn.clicked.connect(self._load_config)
@@ -67,7 +60,6 @@ class SetupPanel(QWidget):
         row2.addWidget(load_btn)
         row2.addWidget(save_btn)
         lay.addLayout(row2)
-
         row3 = QHBoxLayout()
         row3.addWidget(QLabel("Data path:"))
         self.data_path = QLineEdit()
@@ -83,7 +75,6 @@ class SetupPanel(QWidget):
     def _qubit_group(self):
         grp = QGroupBox("Qubit")
         lay = QVBoxLayout(grp)
-
         self._qubit_bg = QButtonGroup(self)
         qrow = QHBoxLayout()
         for i in range(4):
@@ -96,7 +87,6 @@ class SetupPanel(QWidget):
             lambda qid, checked: self.qubit_changed.emit(qid) if checked else None
         )
         lay.addLayout(qrow)
-
         row = QHBoxLayout()
         row.addWidget(QLabel("Yoko (mA):"))
         self.yoko_spin = QDoubleSpinBox()
@@ -105,8 +95,6 @@ class SetupPanel(QWidget):
         row.addWidget(self.yoko_spin)
         lay.addLayout(row)
         return grp
-
-    # ── Slots ─────────────────────────────────────────────────────────────────
 
     def _on_connect(self, checked):
         if checked:
@@ -134,8 +122,6 @@ class SetupPanel(QWidget):
         path = self.config_path.text().strip()
         if path:
             self.config_loaded.emit(path)
-
-    # ── Accessors ─────────────────────────────────────────────────────────────
 
     @property
     def active_qubit(self):

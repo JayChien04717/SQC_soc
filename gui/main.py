@@ -8,7 +8,6 @@ Entry point for qick_workspace GUI.
 import sys
 import os
 
-# Allow running from repo root: python gui/main.py
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from PySide6.QtWidgets import QApplication

@@ -39,8 +39,10 @@ from datetime import datetime
 import h5py
 import numpy as np
 
-from .system_cfg import DATA_PATH
-from .system_tool import get_next_filename_labber, config_to_yaml
+try:
+    from .system_cfg import DATA_PATH
+except Exception:
+    DATA_PATH = ""
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -88,8 +90,8 @@ def save_data(expt, qb_idx, config_all=None, yoko_value=None, title=None):
     if expt.iqdata is None:
         raise RuntimeError("No data to save — run the experiment first.")
 
-    from .system_tool import get_next_filename_labber
-    from .system_cfg import DATA_PATH
+    from .system_tool import get_next_filename_labber, config_to_yaml
+    from .system_cfg import DATA_PATH as _DATA_PATH
     from scrip.base_experiment import BaseExperiment
 
     # ── Build filename ───────────────────────────────────────────────────────
@@ -98,7 +100,7 @@ def save_data(expt, qb_idx, config_all=None, yoko_value=None, title=None):
     else:
         expt_name = f"{expt.EXPT_NAME}_{qb_idx}"
 
-    save_dir = BaseExperiment._data_path or DATA_PATH
+    save_dir = BaseExperiment._data_path or _DATA_PATH
     base_path = get_next_filename_labber(save_dir, expt_name, yoko_value)
     file_path = base_path + ".h5"
 
