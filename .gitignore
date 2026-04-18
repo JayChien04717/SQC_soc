@@ -4,6 +4,7 @@ __pycache__/
 .vscode/
 .idea/
 *.h5
+!example/*.h5
 Data/
 qick/
 *.log

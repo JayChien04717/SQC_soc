@@ -154,4 +154,51 @@ write_h5("s003a_flux_spec_q2_001.h5",
          iq=iq_fs,
          config={"reps": 500, "py_avg": 5})
 
+# ── 8. Single-Shot Readout (1D: shot index, two IQ blobs) ────────────────────
+np.random.seed(42)
+N = 2000                                    # total shots
+n_g = int(N * 0.55)                        # ~55% ground state
+n_e = N - n_g
+
+# Ground state blob centered near (500, 50), excited near (-300, 600)
+iq_g = (500 + 80 * np.random.randn(n_g)) + 1j * (50  + 80 * np.random.randn(n_g))
+iq_e = (-300 + 80 * np.random.randn(n_e)) + 1j * (600 + 80 * np.random.randn(n_e))
+iq_ss = np.concatenate([iq_g, iq_e])
+# Shuffle so shots are interleaved (realistic)
+idx = np.random.permutation(N)
+iq_ss = iq_ss[idx]
+shots = np.arange(N, dtype=np.float32)
+
+write_h5("s010_single_shot_q2_001.h5",
+         experiment="s010_single_shot_ge", qubit=2, tag="SingleShot",
+         timestamp="2024-01-15T15:30:00",
+         x_vals=shots, x_name="Shot index", x_unit="#",
+         iq=iq_ss,
+         config={"reps": N, "threshold": 100.0,
+                 "readout_length": 2.0, "readout_freq": 6500.0})
+
+# ── 9. Single-Shot vs Readout Power (2D: power × shot index) ─────────────────
+powers = np.linspace(-30, 0, 16)           # dBm
+n_shots = 200
+iq_rows = []
+for p in powers:
+    snr = 10 ** (p / 20)                   # SNR scales linearly with amplitude
+    sep = 400 * snr                        # blob separation grows with power
+    n_g_p = n_shots // 2
+    n_e_p = n_shots - n_g_p
+    ig = (sep / 2  + 60 * np.random.randn(n_g_p)) + 1j * (30 + 60 * np.random.randn(n_g_p))
+    ie = (-sep / 2 + 60 * np.random.randn(n_e_p)) + 1j * (30 + 60 * np.random.randn(n_e_p))
+    row = np.concatenate([ig, ie])
+    iq_rows.append(row)
+iq_2d_ss = np.array(iq_rows)               # shape (16, 200)
+x_shots = np.arange(n_shots, dtype=np.float32)
+
+write_h5("s010b_ss_vs_power_q2_001.h5",
+         experiment="s010b_ss_vs_power_ge", qubit=2, tag="SingleShot2D",
+         timestamp="2024-01-15T15:55:00",
+         x_vals=x_shots, x_name="Shot index", x_unit="#",
+         y_vals=powers,  y_name="Readout Power", y_unit="dBm",
+         iq=iq_2d_ss,
+         config={"reps": n_shots, "py_avg": 1, "readout_freq": 6500.0})
+
 print("\nDone! Example files written to:", OUT)
