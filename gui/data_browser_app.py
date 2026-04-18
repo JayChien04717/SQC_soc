@@ -31,6 +31,9 @@ try:
 except ImportError:
     _HAS_DM = False
 
+from gui import theme
+from gui.theme import BG0, BG1, BG3, ACCENT, TEXT, TEXT_DIM
+
 
 class DataBrowserWindow(QMainWindow):
     """Standalone full-screen data browser."""
@@ -130,8 +133,11 @@ class DataBrowserWindow(QMainWindow):
 
         # Matplotlib canvas + toolbar
         self.fig = Figure(tight_layout=True)
+        self.fig.patch.set_facecolor(BG0)
         self.ax  = self.fig.add_subplot(111)
+        self._style_ax(self.ax)
         self.canvas = FigureCanvas(self.fig)
+        self.canvas.setStyleSheet(f"background-color: {BG0};")
         self.canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         toolbar = NavToolbar(self.canvas, self)
         lay.addWidget(toolbar)
@@ -258,6 +264,16 @@ class DataBrowserWindow(QMainWindow):
 
         self._replot()
 
+    @staticmethod
+    def _style_ax(ax):
+        ax.set_facecolor(BG1)
+        ax.tick_params(colors=TEXT_DIM, labelsize=9)
+        ax.xaxis.label.set_color(TEXT_DIM)
+        ax.yaxis.label.set_color(TEXT_DIM)
+        ax.title.set_color(TEXT)
+        for spine in ax.spines.values():
+            spine.set_edgecolor(BG3)
+
     def _replot(self):
         if self._current_data is None:
             return
@@ -275,13 +291,14 @@ class DataBrowserWindow(QMainWindow):
 
         # Always rebuild the figure cleanly to avoid colorbar layout pollution
         self.fig.clear()
+        self.fig.patch.set_facecolor(BG0)
         self.ax = self.fig.add_subplot(111)
+        self._style_ax(self.ax)
 
         is_2d = d["y"] is not None and y.ndim == 2
 
         if is_2d:
             yv = d["y"]["values"]
-            # pcolormesh gives correct axis tick labels for non-uniform grids
             xc = np.concatenate([[x[0] - (x[1]-x[0])/2],
                                   (x[:-1] + x[1:]) / 2,
                                   [x[-1] + (x[-1]-x[-2])/2]])
@@ -289,11 +306,13 @@ class DataBrowserWindow(QMainWindow):
                                   (yv[:-1] + yv[1:]) / 2,
                                   [yv[-1] + (yv[-1]-yv[-2])/2]])
             pcm = self.ax.pcolormesh(xc, yc, y, cmap="RdBu_r", shading="flat")
-            self.fig.colorbar(pcm, ax=self.ax, pad=0.02, label=ylabel_map[ch])
+            cbar = self.fig.colorbar(pcm, ax=self.ax, pad=0.02, label=ylabel_map[ch])
+            cbar.ax.yaxis.set_tick_params(color=TEXT_DIM, labelcolor=TEXT_DIM)
+            cbar.set_label(ylabel_map[ch], color=TEXT_DIM)
             self.ax.set_xlabel(f"{d['x']['name']} ({d['x']['unit']})")
             self.ax.set_ylabel(f"{d['y']['name']} ({d['y']['unit']})")
         else:
-            self.ax.plot(x, y.ravel(), ".-", markersize=4, linewidth=1.2)
+            self.ax.plot(x, y.ravel(), ".-", color=ACCENT, markersize=4, linewidth=1.2)
             self.ax.set_xlabel(f"{d['x']['name']} ({d['x']['unit']})")
             self.ax.set_ylabel(ylabel_map[ch])
 
@@ -308,6 +327,7 @@ class DataBrowserWindow(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Data Browser")
+    theme.apply(app)
     win = DataBrowserWindow()
     win.show()
 

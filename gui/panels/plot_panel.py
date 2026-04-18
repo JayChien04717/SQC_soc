@@ -2,6 +2,7 @@ import numpy as np
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLabel, QCheckBox
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+from gui.theme import BG0, BG1, BG3, ACCENT, TEXT, TEXT_DIM
 
 
 class PlotPanel(QWidget):
@@ -34,8 +35,11 @@ class PlotPanel(QWidget):
 
         # Matplotlib canvas
         self.fig = Figure(figsize=(5, 3), tight_layout=True)
+        self.fig.patch.set_facecolor(BG0)
         self.ax  = self.fig.add_subplot(111)
+        self._style_ax(self.ax)
         self.canvas = FigureCanvas(self.fig)
+        self.canvas.setStyleSheet(f"background-color: {BG0};")
         root.addWidget(self.canvas)
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -51,7 +55,18 @@ class PlotPanel(QWidget):
     def clear(self):
         self._x = self._iq = None
         self.ax.cla()
+        self._style_ax(self.ax)
         self.canvas.draw_idle()
+
+    @staticmethod
+    def _style_ax(ax):
+        ax.set_facecolor(BG1)
+        ax.tick_params(colors=TEXT_DIM, labelsize=9)
+        ax.xaxis.label.set_color(TEXT_DIM)
+        ax.yaxis.label.set_color(TEXT_DIM)
+        ax.title.set_color(TEXT)
+        for spine in ax.spines.values():
+            spine.set_edgecolor(BG3)
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
@@ -74,8 +89,9 @@ class PlotPanel(QWidget):
             ylabel = "Q (ADC)"
 
         self.ax.cla()
+        self._style_ax(self.ax)
         if y.ndim == 1:
-            self.ax.plot(self._x, y, ".-", markersize=3)
+            self.ax.plot(self._x, y, ".-", color=ACCENT, markersize=3)
         else:
             # 2D: colormap
             self.ax.imshow(

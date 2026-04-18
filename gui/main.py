@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 from gui.main_window import MainWindow
+from gui import theme
 
 
 def main():
@@ -21,6 +22,7 @@ def main():
     )
     app = QApplication(sys.argv)
     app.setApplicationName("qick_workspace GUI")
+    theme.apply(app)
 
     win = MainWindow()
     win.show()
