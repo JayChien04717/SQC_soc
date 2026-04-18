@@ -20,7 +20,10 @@ from ..plotter.liveplot import liveplotfun
 
 
 class DragProgram(BaseProgram):
+    """QICK program for DRAG calibration: sweeps alpha via two-for-loop 2D scan."""
+
     def _initialize(self, cfg):
+        """Set up resonator, qubit generator, and DRAG-shaped x180/mx180 pulses."""
         self.setup_resonator(cfg)
         self.declare_gen_auto(cfg["qb_ch"], cfg["nqz_qb"], "qb_mixer", cfg)
 
@@ -44,6 +47,7 @@ class DragProgram(BaseProgram):
         )
 
     def _body(self, cfg):
+        """Apply optional cooling, repeat X180/mX180 pairs ``iter`` times, then measure."""
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
         if cfg.get("cooling", False):
             self.apply_cool(cfg)
@@ -63,7 +67,13 @@ class DragProgram(BaseProgram):
 
 
 class DragCalibration(BaseExperiment):
-    """DRAG Calibration: 2D sweep over (alpha × iteration) using liveplotfun 2-for-loop scan."""
+    """
+    DRAG Calibration: 2D sweep over (alpha x iteration) using liveplotfun 2-for-loop scan.
+
+    Sweeps DRAG parameter alpha on the inner axis and iteration count on the
+    outer axis.  After acquisition, sums all iteration rows and fits a parabola
+    near the extremum to sub-pixel precision to locate the optimal alpha.
+    """
 
     EXPT_NAME = "s005a_drag_ge"
     TAG = "DRAGCalibration"
@@ -83,6 +93,22 @@ class DragCalibration(BaseExperiment):
     # ── helpers ──────────────────────────────────────────────────────────────
 
     def _build_scan_axes(self):
+        """
+        Build and return the alpha and iteration sweep axes from config.
+
+        Returns
+        -------
+        alphas : ndarray
+            DRAG alpha sweep values.
+        iters : ndarray of float
+            Iteration count sweep values.
+
+        Raises
+        ------
+        ValueError
+            If ``alpha_start``, ``alpha_stop``, or ``alpha_steps`` are missing
+            from ``cfg``.
+        """
         cfg = self.cfg
         if (
             "alpha_start" not in cfg
@@ -111,8 +137,24 @@ class DragCalibration(BaseExperiment):
 
     def run(self, py_avg, show_final_plot=False, **kwargs):
         """
-        2-D parameter scan: outer loop = iter (N), inner loop = alpha.
-        Delegates to liveplotfun's _liveplot_2d_scan via scan_x_axis + scan_y_axis.
+        Run the 2D parameter scan: outer loop = iter (N), inner loop = alpha.
+
+        Delegates to ``liveplotfun``'s ``_liveplot_2d_scan`` via
+        ``scan_x_axis`` + ``scan_y_axis``.
+
+        Parameters
+        ----------
+        py_avg : int
+            Hardware averages (rounds) per point.
+        show_final_plot : bool, optional
+            Whether to show the final plot from liveplotfun.
+        **kwargs
+            Additional keyword arguments (ignored).
+
+        Returns
+        -------
+        fit_params : dict
+            Dictionary with key ``"optimal_alpha"`` (float).
         """
         alphas, iters = self._build_scan_axes()
         self._sweep_vals_x = alphas
@@ -173,14 +215,26 @@ class DragCalibration(BaseExperiment):
     # ── analysis ─────────────────────────────────────────────────────────────
 
     def analyze_and_plot(self):
-        """Backward-compatible alias for _post_fit()."""
+        """Backward-compatible alias for ``_post_fit()``."""
         return self._post_fit()
 
     def _post_fit(self, x_vals=None):
         """
-        Sum all iteration traces (abs), then find the alpha at the
-        max (or min) of the summed trace — mimics error-amplification logic.
-        Returns: optimal_alpha (float).
+        Locate the optimal DRAG alpha from the iteration-summed trace.
+
+        Sums all iteration rows (abs), then fits a parabola near the largest
+        extremum (max or min relative to median) for sub-pixel refinement.
+
+        Parameters
+        ----------
+        x_vals : ndarray or None, optional
+            Unused; retained for BaseExperiment interface compatibility.
+
+        Returns
+        -------
+        fit_params : dict
+            Dictionary with key ``"optimal_alpha"`` (float, rounded to 6
+            decimal places).
         """
         if self.iqdata is None:
             print("No data. Call run() first.")
@@ -192,13 +246,13 @@ class DragCalibration(BaseExperiment):
         # ── Sum every iteration row ───────────────────────────────────────────
         sum_trace = np.sum(np.abs(self.iqdata), axis=0)  # shape: (n_alpha,)
 
-        # Peak: index of maximum in the summed trace
+        # Peak: index of maximum and minimum in the summed trace
         idx_max = int(np.argmax(sum_trace))
         idx_min = int(np.argmin(sum_trace))
         optimal_alpha_max = alphas[idx_max]
         optimal_alpha_min = alphas[idx_min]
 
-        # Parabola sub-pixel refinement around the max peak
+        # Parabola sub-pixel refinement around the peak
         try:
 
             def parabola(x, a, b, c):
@@ -287,6 +341,7 @@ class DragCalibration(BaseExperiment):
         return self.fit_params
 
     def _save_comment(self, dict_val):
+        """Return a comment string including the optimal alpha if available."""
         if self.fit_params:
             a = self.fit_params.get("optimal_alpha", "N/A")
             return f"DRAG Calibration\nOptimal alpha = {a}\n{dict_val}"

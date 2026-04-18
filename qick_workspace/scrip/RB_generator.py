@@ -1,13 +1,42 @@
 import numpy as np
 import random
 
+
 def rx(theta):
+    """
+    Construct the single-qubit X-rotation matrix R_x(theta).
+
+    Parameters
+    ----------
+    theta : float
+        Rotation angle in radians.
+
+    Returns
+    -------
+    ndarray of shape (2, 2)
+        Unitary rotation matrix about the X axis.
+    """
     return np.array([[np.cos(theta/2), -1j*np.sin(theta/2)],
                      [-1j*np.sin(theta/2), np.cos(theta/2)]])
 
+
 def ry(theta):
+    """
+    Construct the single-qubit Y-rotation matrix R_y(theta).
+
+    Parameters
+    ----------
+    theta : float
+        Rotation angle in radians.
+
+    Returns
+    -------
+    ndarray of shape (2, 2)
+        Unitary rotation matrix about the Y axis.
+    """
     return np.array([[np.cos(theta/2), -np.sin(theta/2)],
                      [np.sin(theta/2), np.cos(theta/2)]])
+
 
 I = np.eye(2, dtype=complex)
 X_half  = rx( np.pi/2)
@@ -95,7 +124,21 @@ assert len(inverse_table) == 24
 def find_clifford_index(U):
     """
     Return index of the Clifford closest to U (up to global phase).
-    Raises AssertionError if no match found within tolerance.
+
+    Parameters
+    ----------
+    U : ndarray of shape (2, 2)
+        Unitary matrix to look up in the Clifford group.
+
+    Returns
+    -------
+    best_idx : int
+        Index into ``clifford_matrices`` of the closest element.
+
+    Raises
+    ------
+    AssertionError
+        If no match is found within tolerance 1e-6.
     """
     best_idx, best_dist = 0, np.inf
     for idx, m in enumerate(clifford_matrices):
@@ -128,18 +171,31 @@ def single_qb_rb(n_clifford, n_sample, interleave=None, seed=None, debug=False):
 
     Parameters
     ----------
-    n_clifford  : int        — number of random Cliffords per sequence
-    n_sample    : int        — number of independent sequences
-    interleave  : str|None   — gate to interleave; one of "X","Y","X/2","Y/2"
-    seed        : int|None   — random seed for reproducibility
-    debug       : bool       — if True, print each sample's RB list and recovery gate
+    n_clifford : int
+        Number of random Cliffords per sequence.
+    n_sample : int
+        Number of independent sequences to generate.
+    interleave : str or None, optional
+        Gate to interleave after each random Clifford.  Must be one of
+        ``"X"``, ``"Y"``, ``"X/2"``, ``"Y/2"``.  None produces standard RB.
+    seed : int or None, optional
+        Random seed for reproducibility.
+    debug : bool, optional
+        If True, print each sample's RB list and recovery gate.
 
     Returns
     -------
-    list of 1D flat gate lists  (length = n_sample)
-        Each element is a flat list of gate strings:
+    results : list of list of str
+        Length ``n_sample``.  Each element is a flat list of gate strings::
+
             [random_gates..., (interleaved_gates...,) recovery_gates...]
-        i.e. the recovery gate is already appended at the end.
+
+        The recovery gate is already appended at the end.
+
+    Raises
+    ------
+    ValueError
+        If ``interleave`` is not in ``INTERLEAVE_GATES``.
     """
     rng = random.Random(seed)
 
@@ -210,7 +266,17 @@ def single_qb_rb(n_clifford, n_sample, interleave=None, seed=None, debug=False):
 def verify_sequence(full_sequence):
     """
     Verify that the full 1D flat sequence (rb gates + recovery) returns to Identity.
-    Returns True if residual < 1e-6.
+
+    Parameters
+    ----------
+    full_sequence : list of str
+        Flat gate list including the recovery gate, as returned by
+        ``single_qb_rb``.
+
+    Returns
+    -------
+    bool
+        True if the residual matrix distance from Identity is less than 1e-6.
     """
     mat = I.copy()
     for g in full_sequence:

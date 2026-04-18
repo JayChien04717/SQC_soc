@@ -1,7 +1,9 @@
 """
-s005 — Power Rabi (ge)
-=======================
-Amplitude Rabi: sweeps qubit drive gain at fixed length.
+s005a — Amplified Amplitude Error (AAE) / Power Rabi Chevron
+=============================================================
+Amplitude Rabi: sweeps qubit drive gain at fixed length, with an outer
+software loop over the number of repetitions (iteration count) to amplify
+amplitude errors for easier calibration.
 """
 
 import numpy as np
@@ -18,13 +20,17 @@ from ..plotter.plot_utils import plot_final
 
 
 class PowerRabiProgram(BaseProgram):
+    """QICK program for AAE power Rabi: repeats the pulse ``iteration`` times."""
+
     def _initialize(self, cfg):
+        """Set up resonator, qubit generator, and gain-swept qubit pulse."""
         self.setup_resonator(cfg)
         self.setup_qubit_gen(cfg, "ge")
         self.add_loop("gainloop", cfg["steps"])
         self.setup_qb_pulse(cfg, "ge", name="qb_pulse")
 
     def _body(self, cfg):
+        """Repeat the qubit pulse ``cfg['iteration']`` times, then measure."""
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
         if cfg.get("cooling", False):
             self.apply_cool(cfg)
@@ -37,6 +43,14 @@ class PowerRabiProgram(BaseProgram):
 
 
 class PowerRabiChevron(BaseExperiment):
+    """
+    AAE Power Rabi Chevron experiment.
+
+    Performs a 2D scan: inner loop sweeps gain (hardware), outer loop
+    sweeps iteration count (software).  Summing all iteration rows and
+    fitting a sinc^2 model to the summed trace locates the optimal pi gain.
+    """
+
     EXPT_NAME = "s005_power_rabi_chevron"
     TAG = "Rabi"
     X_LABEL = "Dac Gain (a.u)"
@@ -53,6 +67,7 @@ class PowerRabiChevron(BaseExperiment):
     # ── helpers ──────────────────────────────────────────────────────────────
 
     def _build_scan_axes(self):
+        """Build and return (gains, iters) arrays from config."""
         cfg = self.cfg
         prog = self._create_program()
         gains = self._extract_sweep_axis(prog)
@@ -73,9 +88,25 @@ class PowerRabiChevron(BaseExperiment):
 
     def run(self, py_avg, show_final_plot=False, **kwargs):
         """
-        Mixed 2D parameter scan:
-        - Inner loop: Hardware sweep over gain (handled by PowerRabiProgram).
-        - Outer loop: Software sweep over iterations.
+        Run the mixed 2D parameter scan with a live colour-mesh display.
+
+        The inner loop is a hardware sweep over gain (handled by
+        ``PowerRabiProgram``).  The outer loop is a software sweep over
+        the iteration count.
+
+        Parameters
+        ----------
+        py_avg : int
+            Hardware averages (rounds) per gain point.
+        show_final_plot : bool, optional
+            Reserved for compatibility; unused in this override.
+        **kwargs
+            Additional keyword arguments (ignored).
+
+        Returns
+        -------
+        optimal_gain : float
+            Estimated optimal pi gain from the sinc^2 fit.
         """
         gains, iters = self._build_scan_axes()
         self._sweep_vals_x = gains
@@ -137,6 +168,7 @@ class PowerRabiChevron(BaseExperiment):
     # ── _create_program / _extract_sweep_axis (required) ─────────────────────
 
     def _create_program(self):
+        """Instantiate and return the PowerRabiProgram."""
         self.cfg.setdefault("iteration", self.cfg.get("iter_start", 1))
         return PowerRabiProgram(
             self.soccfg,
@@ -146,17 +178,37 @@ class PowerRabiChevron(BaseExperiment):
         )
 
     def _extract_sweep_axis(self, prog):
+        """Return the gain sweep axis."""
         return prog.get_pulse_param("qb_pulse", "gain", as_array=True)
 
     def _extract_sweep_axis_y(self, prog):
+        """Return the iteration sweep axis."""
         return self._sweep_vals_y
 
     # ── analysis ─────────────────────────────────────────────────────────────
 
     def analyze_and_plot(self):
+        """Backward-compatible alias for ``_post_fit()``."""
         return self._post_fit()
 
     def _post_fit(self, x_vals=None):
+        """
+        Fit a sinc^2 model to the iteration-summed Rabi trace.
+
+        Sums amplitude over all iteration rows, applies Gaussian smoothing,
+        estimates the Rabi frequency via FFT, then fits a sinc^2 model to
+        locate the optimal pi gain.
+
+        Parameters
+        ----------
+        x_vals : ndarray or None, optional
+            Unused; retained for BaseExperiment interface compatibility.
+
+        Returns
+        -------
+        optimal_gain : float
+            Estimated optimal pi gain.
+        """
         if self.iqdata is None:
             print("No data. Call run() first.")
             return None
@@ -167,17 +219,16 @@ class PowerRabiChevron(BaseExperiment):
 
         sum_trace = gaussian_filter1d(raw_sum_trace, sigma=2.0)
 
-        # FFT 估算主頻率 → sinc width
+        # FFT estimate of main frequency → sinc width
         dx = gains[1] - gains[0]
         fft_vals = np.abs(np.fft.rfft(sum_trace - np.mean(sum_trace)))
         fft_freqs = np.fft.rfftfreq(len(gains), d=dx)
         freq_guess = fft_freqs[np.argmax(fft_vals[1:]) + 1]
-        width_guess = 0.5 / freq_guess  # sinc² 第一零點在 g0 ± width
+        width_guess = 0.5 / freq_guess  # sinc^2 first zero at g0 ± width
 
         amp_guess = (np.max(sum_trace) - np.min(sum_trace)) / 2
         off_guess = np.mean(sum_trace)
 
-        # contrast 方向：spike 已被 sigma=2 壓掉，直接用平滑極值
         idx_max = int(np.argmax(sum_trace))
         idx_min = int(np.argmin(sum_trace))
         if abs(sum_trace[idx_max] - off_guess) >= abs(sum_trace[idx_min] - off_guess):
@@ -187,7 +238,7 @@ class PowerRabiChevron(BaseExperiment):
             x0_guess = gains[idx_min]
             sign_guess = -1.0
 
-        # np.sinc(x) = sin(πx)/(πx)，所以傳入 (g - g0)/width 即可
+        # np.sinc(x) = sin(pi*x)/(pi*x), pass (g - g0)/width
         def sinc2_model(x, A, x0, width, offset):
             return A * np.sinc((x - x0) / width) ** 2 + offset
 
@@ -210,8 +261,6 @@ class PowerRabiChevron(BaseExperiment):
 
             A_fit, x0_fit, width_fit, offset_fit = popt
 
-            # sinc² 的主極值就在 x0，不需要再掃 fine_x
-            # 但仍然要確認 x0 在掃描範圍內
             if gains.min() <= x0_fit <= gains.max():
                 optimal_gain = x0_fit
                 fit_success = True
@@ -223,7 +272,7 @@ class PowerRabiChevron(BaseExperiment):
 
         print(f"\n[PowerRabi] Optimal pi gain = {optimal_gain:.6f}")
 
-        # ── 繪圖 ──────────────────────────────────────────────────────────────────
+        # ── Plot ──────────────────────────────────────────────────────────────────
         fig, axes = plt.subplots(1, 2, figsize=(13, 5))
 
         ax0 = axes[0]
@@ -267,6 +316,7 @@ class PowerRabiChevron(BaseExperiment):
         return optimal_gain
 
     def _save_comment(self, dict_val):
+        """Return a comment string including the optimal gain if available."""
         if self.fit_params:
             g = self.fit_params.get("optimal_gain", "N/A")
             return f"AAE Power Rabi\nOptimal gain = {g}\n{dict_val}"

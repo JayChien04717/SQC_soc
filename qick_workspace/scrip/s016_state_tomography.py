@@ -17,12 +17,16 @@ from ..tools.system_tool import hdf5_generator, get_next_filename_labber, config
 # ── Program ──
 
 class StateTomographyProgram(BaseProgram):
+    """QICK program for a single tomography axis measurement with optional state preparation."""
+
     def _initialize(self, cfg):
+        """Set up resonator, qubit generator, and standard ge gates."""
         self.setup_resonator(cfg)
         self.setup_qubit_gen(cfg, 'ge')
         self.setup_standard_gates(cfg, prefix='ge')
 
     def _body(self, cfg):
+        """Apply optional calibration or prep pulse, tomography pre-rotation, then measure."""
         axis = cfg["tomo_axis"]
         cal_pulse = cfg.get("cal_pulse", None)
         prep_pulse = cfg.get("prep_pulse", None)
@@ -58,9 +62,20 @@ class StateTomographyProgram(BaseProgram):
 # ── Experiment ──
 
 class Tomography:
-    """Single-qubit state tomography with X/Y/Z measurements + MLE reconstruction."""
+    """Single-qubit state tomography with X/Y/Z measurements and MLE reconstruction."""
 
     def __init__(self, config):
+        """
+        Parameters
+        ----------
+        config : dict
+            Experiment configuration dictionary.
+
+        Raises
+        ------
+        RuntimeError
+            If ``BaseExperiment.setup()`` has not been called first.
+        """
         from .base_experiment import BaseExperiment
         if BaseExperiment._soc is None:
             raise RuntimeError("Call BaseExperiment.setup(soc, soccfg, data_path) first.")
@@ -79,7 +94,7 @@ class Tomography:
         self._sz = np.array([[1,0],[0,-1]], dtype=complex)
 
     def _run_calibration(self, pyavg):
-        """Calibrate |0⟩ and |1⟩ states."""
+        """Acquire IQ data for |0> and |1> calibration states."""
         print("Calibrating |0⟩ state...")
         cfg_g = self.cfg.copy()
         cfg_g.update({"tomo_axis": "Z", "cal_pulse": "None", "prep_pulse": None})
@@ -102,7 +117,7 @@ class Tomography:
         return iq_g, iq_e
 
     def _run_tomography(self, pyavg, prep_pulse_name=None):
-        """Run X, Y, Z measurements."""
+        """Acquire IQ data along X, Y, and Z measurement axes."""
         resolved = resolve_gate(prep_pulse_name) if prep_pulse_name else None
         tomo_data = {}
         for axis in tqdm(["X", "Y", "Z"], desc=f"Tomography ({prep_pulse_name})"):
@@ -117,12 +132,42 @@ class Tomography:
         return tomo_data
 
     def _project_to_expect(self, iq_data, iq_g, iq_e):
+        """
+        Project IQ data onto the |0>-|1> calibration axis to obtain an expectation value.
+
+        Parameters
+        ----------
+        iq_data : complex
+            Measured IQ value.
+        iq_g : complex
+            Calibration IQ for |0> state.
+        iq_e : complex
+            Calibration IQ for |1> state.
+
+        Returns
+        -------
+        expect : float
+            Expectation value clipped to [-1, 1].
+        """
         cal_vector = iq_e - iq_g
         data_vector = iq_data - iq_g
         projection = np.real(data_vector * np.conj(cal_vector)) / np.abs(cal_vector)**2
         return np.clip((1 - projection) - projection, -1, 1)
 
     def _mle_reconstruction(self, rho_raw):
+        """
+        Project a raw density matrix to the nearest physical state via MLE.
+
+        Parameters
+        ----------
+        rho_raw : ndarray of shape (2, 2)
+            Raw density matrix (may be non-physical).
+
+        Returns
+        -------
+        rho_mle : ndarray of shape (2, 2)
+            Physical density matrix with non-negative eigenvalues and unit trace.
+        """
         eig_vals, eig_vecs = np.linalg.eigh(rho_raw)
         eig_vals = np.maximum(0, eig_vals)
         trace = np.sum(eig_vals)
@@ -130,6 +175,16 @@ class Tomography:
         return eig_vecs @ np.diag(eig_vals) @ np.conj(eig_vecs.T)
 
     def _reconstruct_density_matrix(self):
+        """
+        Reconstruct the density matrix from stored X, Y, Z tomography data.
+
+        Returns
+        -------
+        expect_values : dict
+            Bloch vector components ``{"X": float, "Y": float, "Z": float}``.
+        rho_mle : ndarray of shape (2, 2)
+            MLE-reconstructed density matrix.
+        """
         expect_values = {}
         for axis in ["X", "Y", "Z"]:
             expect_values[axis] = self._project_to_expect(
@@ -143,12 +198,39 @@ class Tomography:
         return expect_values, rho_mle
 
     def run(self, py_avg, prep_pulse_name=None):
+        """
+        Run calibration and tomography, then reconstruct the density matrix.
+
+        Parameters
+        ----------
+        py_avg : int
+            Hardware averages (rounds) per measurement axis.
+        prep_pulse_name : str or None, optional
+            Gate name to prepare the state under study (e.g. ``"X"``).
+            ``None`` prepares the ground state.
+        """
         self.prep_pulse_name = str(prep_pulse_name)
         self.iq_g, self.iq_e = self._run_calibration(py_avg)
         self.tomo_data_raw = self._run_tomography(py_avg, prep_pulse_name)
         self.expect_values, self.rho_mle = self._reconstruct_density_matrix()
 
     def plot(self, plot_type="2d", qb_idx=None):
+        """
+        Plot the reconstructed density matrix as a 2D heatmap or 3D bar chart.
+
+        Parameters
+        ----------
+        plot_type : str, optional
+            ``"2d"`` for a 2D matrix heatmap or ``"3d"`` for a 3D bar chart.
+        qb_idx : int or None, optional
+            Qubit index prepended to the plot title when provided.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        axes : tuple or None
+            Axes objects; ``None`` for 3D plots.
+        """
         if self.rho_mle is None:
             print("No data. Run first.")
             return None, None
@@ -203,6 +285,16 @@ class Tomography:
             return fig, None
 
     def saveLabber(self, qb_idx, yoko_value=None):
+        """
+        Save tomography data to an HDF5/Labber file.
+
+        Parameters
+        ----------
+        qb_idx : int
+            Qubit index appended to the experiment name.
+        yoko_value : float or None, optional
+            Yokogawa flux bias value embedded in the filename.
+        """
         if not self.tomo_data_raw:
             print("No data. Run first.")
             return

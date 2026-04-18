@@ -26,8 +26,36 @@ def get_next_filename_labber(
     dest_path: str, exp_name: str, yoko_value: Optional[Dict[str, Any]] = None
 ) -> str:
     """
-    Generates the next HDF5 filename.
-    Files are saved in the directory for the current date.
+    Generate the next HDF5 filename for a Labber-compatible log file.
+
+    Files are saved inside a date-structured subdirectory under *dest_path*
+    (``<dest_path>/<YYYY>/<MM>/Data_<MMDD>/``).  In normal (index) mode the
+    function scans the entire *dest_path* tree for existing files matching
+    ``<exp_name>_NNN.hdf5`` and returns a path with the next available index.
+    In Yoko mode it builds a filename from the measured output value.
+
+    Parameters
+    ----------
+    dest_path : str
+        Root directory where experiment data is stored.
+    exp_name : str
+        Base name of the experiment (e.g. ``"s008_T1_ge_Q1"``).
+    yoko_value : dict, optional
+        If provided, must contain ``"value"`` (numeric) and ``"unit"`` (str)
+        keys.  The filename encodes the Yokogawa output level instead of an
+        auto-increment index.
+
+    Returns
+    -------
+    file_path : str
+        Full path (without ``.hdf5`` extension) ready to pass to
+        :func:`hdf5_generator`.
+
+    Raises
+    ------
+    ValueError
+        If *yoko_value* is provided but is missing the ``"value"`` or
+        ``"unit"`` key.
     """
     # 1. Ensure dest_path is absolute and create today's save directory
     dest_path = os.path.abspath(dest_path)
@@ -75,7 +103,31 @@ def hdf5_generator(
     tag=None,
 ):
     """
-    Create a Labber-compatible LogFile for data.
+    Create a Labber-compatible HDF5 log file and write measurement data.
+
+    Wraps ``Labber.createLogFile_ForData`` to handle both 1-D (x only) and
+    2-D (x + y sweep) datasets.  The signal channel is always stored as a
+    complex vector.
+
+    Parameters
+    ----------
+    filepath : str
+        Destination file path (without ``.hdf5`` extension).
+    x_info : dict
+        Step-channel descriptor for the fast (x) axis.  Must contain at
+        minimum ``"name"``, ``"unit"``, and ``"values"`` keys as required by
+        Labber.
+    z_info : dict
+        Log-channel descriptor for the measured signal.  Must contain
+        ``"name"``, ``"unit"``, and ``"values"`` keys.  ``"complex"`` and
+        ``"vector"`` flags are set automatically.
+    y_info : dict, optional
+        Step-channel descriptor for the slow (y) axis.  When supplied the
+        data in ``z_info["values"]`` is iterated row by row.
+    comment : str, optional
+        Free-text comment stored in the log file header.
+    tag : str, optional
+        Labber tag string associated with the log file.
     """
     np.float = float
     np.bool = bool
@@ -115,6 +167,17 @@ def clean_config(config):
     - Converts ``addict.Dict`` to plain ``dict``.
 
     The original *config* is **not** mutated.
+
+    Parameters
+    ----------
+    config : dict or addict.Dict
+        Arbitrary nested configuration mapping to clean.
+
+    Returns
+    -------
+    cleaned : dict
+        A plain Python ``dict`` (nested) with all non-serializable objects
+        replaced by their JSON-compatible equivalents.
     """
     # Lazy import – avoids hard dependency on qick at module level
     try:
@@ -148,9 +211,21 @@ def clean_config(config):
 
 def config_to_yaml(config: dict) -> str:
     """
-    Clean a config dict and dump it to a YAML string (PyYAML).
+    Clean a config dict and serialize it to a YAML string.
 
-    Drop-in replacement for the old ``yml_comment()`` from yamltool.
+    Internally calls :func:`clean_config` before dumping, so QICK sweep
+    parameters and NumPy objects are handled automatically.
+
+    Parameters
+    ----------
+    config : dict
+        Raw experiment configuration (may contain NumPy scalars,
+        ``QickParam`` values, or ``addict.Dict`` nodes).
+
+    Returns
+    -------
+    yaml_str : str
+        Human-readable YAML representation of the cleaned configuration.
     """
     return yaml.dump(
         clean_config(config),
@@ -162,13 +237,26 @@ def config_to_yaml(config: dict) -> str:
 
 class ExperimentConfig:
     """
-    A wrapper class to manage, query, and update nested experiment configurations.
+    Manager for nested multi-qubit experiment configurations.
 
-    Features:
-    - Unified access (Mux config) with dot notation support (Addict).
-    - Single qubit extraction (flat dict) with dot notation support.
-    - Unified update method for both single values and dictionary merging.
-    - Export to Python files (Full config or Single Qubit).
+    Provides unified access, per-qubit extraction, structured updates,
+    and YAML / Python-file export for a list of qubit configuration dicts.
+
+    Features
+    --------
+    - Unified (mux) config with dot-notation via :class:`addict.Dict`.
+    - Per-qubit flat extraction via :meth:`get_qubit`.
+    - Smart key search and recursive update via :meth:`update`.
+    - YAML export with human-readable spacing via :meth:`to_yaml`.
+
+    Parameters
+    ----------
+    data : list of dict or dict
+        One configuration dict per qubit, or a single dict.
+    keys_to_unify : list of str, optional
+        Keys whose values should be collapsed to a scalar when all qubits
+        share the same value.  Defaults to
+        ``["reps", "res_length", "ro_length", "trig_time", "relax_delay"]``.
     """
 
     def __init__(
@@ -197,7 +285,18 @@ class ExperimentConfig:
 
     @property
     def unified_config(self) -> AddictDict:
-        """Lazy-computed unified configuration. Only rebuilds when dirty."""
+        """
+        Lazy-computed unified configuration across all qubits.
+
+        Rebuilds only when the underlying data has been mutated since the
+        last access (controlled by the ``_dirty`` flag).
+
+        Returns
+        -------
+        unified : AddictDict
+            Flat mapping where list-valued keys hold one entry per qubit and
+            scalar-valued keys have been unified when all qubits agree.
+        """
         if self._dirty or self._unified_cache is None:
             raw_collected = self._collect_all_key_values(self._raw_list)
             self._unified_cache = self._refine_cfg(raw_collected)
@@ -205,7 +304,7 @@ class ExperimentConfig:
         return self._unified_cache
 
     def _mark_dirty(self) -> None:
-        """Mark the unified config cache as stale."""
+        """Mark the unified config cache as stale so it is rebuilt on next access."""
         self._dirty = True
 
     def __repr__(self) -> str:
@@ -214,8 +313,20 @@ class ExperimentConfig:
 
     def get_qubit(self, q_id: Union[int, str]) -> AddictDict:
         """
-        Retrieve a flattened configuration for a specific Qubit as an AddictDict.
-        Allows access via `config.name` or `config['name']`.
+        Return a flat configuration dict for a single qubit.
+
+        List-valued keys in the unified config are sliced to the element
+        corresponding to *q_id*; scalar keys are passed through unchanged.
+
+        Parameters
+        ----------
+        q_id : int or str
+            Qubit index (0-based) or qubit name (e.g. ``"Q1"``).
+
+        Returns
+        -------
+        cfg : AddictDict
+            Flat dot-access configuration for the requested qubit.
         """
         indices = self._resolve_indices(q_id)
         idx = indices[0]
@@ -236,31 +347,37 @@ class ExperimentConfig:
         mux_gen: int = 12,
     ) -> AddictDict:
         """
-        Extract a mux-ready config for a subset of qubits.
+        Extract a mux-ready configuration for a subset of qubits.
 
-        For each key in unified_config:
-        - If the value is a list, select only the elements at the indices
-          corresponding to the qubits in qb_list (preserving order).
-        - If the value is a scalar, keep it as-is.
+        For each key in :attr:`unified_config`:
 
-        Additionally adds:
+        - If the value is a list, selects only the elements at the indices
+          corresponding to the qubits in *qb_list* (preserving order).
+        - If the value is a scalar, passes it through unchanged.
+
+        Additionally injects mux-specific keys:
+
         - ``mux_ro_chs``: readout channels mapped from qubit index
-          (e.g. Q1→2, Q2→3, ..., Q6→7 with default mux_ro_ch_start=2).
-        - ``gen_mask``: the raw qubit indices (e.g. Q1→0, Q3→2, Q5→4).
+          (e.g. Q1 → 2, Q2 → 3, … with default *mux_ro_ch_start* = 2).
+        - ``gen_mask``: raw qubit indices (e.g. Q1 → 0, Q3 → 2, Q5 → 4).
+        - ``mux_gen``: generator tile number.
+        - ``mux_ro_phases``: list of zeros, one per qubit.
+        - ``mixer_freq``: rounded mean of ``res_freq_ge`` (if present).
 
         Parameters
         ----------
-        qb_list : List[Union[int, str]]
-            Qubit identifiers, e.g. ['Q1', 'Q3', 'Q5'] or [0, 2, 4].
+        qb_list : list of int or str
+            Qubit identifiers, e.g. ``["Q1", "Q3"]`` or ``[0, 2]``.
         mux_ro_ch_start : int, optional
-            The readout channel number corresponding to the first qubit (index 0).
-            Default is 2  (i.e. Q1→2, Q2→3, ...).
+            Readout channel number for the first qubit (index 0).
+            Default is ``2``.
+        mux_gen : int, optional
+            Generator tile number to assign to ``mux_gen``.  Default is ``12``.
 
         Returns
         -------
-        AddictDict
-            A config dict where list-valued keys have been sliced to only the
-            selected qubits, with ``mux_ro_chs`` and ``gen_mask`` injected.
+        cfg : AddictDict
+            Mux-ready config with list keys sliced and mux keys injected.
         """
         indices = self._resolve_indices(qb_list)
 
@@ -284,7 +401,24 @@ class ExperimentConfig:
 
     def to_yaml_mux(self, qb_list: List[Union[int, str]], **kwargs) -> str:
         """
-        Extract a mux-ready config while preserving the nested structure.
+        Extract a mux-ready config while preserving the nested dict structure.
+
+        Unlike :meth:`muxconfig`, which flattens all keys, this method walks
+        the first qubit's raw nested config as a template and fills in
+        per-qubit values (or unified scalars) at each leaf position.
+
+        Parameters
+        ----------
+        qb_list : list of int or str
+            Qubit identifiers (names or 0-based indices).
+        **kwargs
+            Forwarded to :meth:`muxconfig`; supports ``mux_gen`` and
+            ``mux_ro_ch_start``.
+
+        Returns
+        -------
+        yaml_str : str
+            Human-readable YAML string with the nested mux configuration.
         """
         indices = self._resolve_indices(qb_list)
 
@@ -357,9 +491,20 @@ class ExperimentConfig:
         q_index: Union[int, str, List] = None,
     ) -> None:
         """
-        Update parameters for multiple qubits.
-        If `value` is a list/array of the same length as the number of target qubits,
-        each target qubit receives the corresponding value from the list.
+        Update parameters for multiple qubits (alias for :meth:`update`).
+
+        When *value* is a list of the same length as the number of target
+        qubits, each qubit receives the corresponding element.
+
+        Parameters
+        ----------
+        param : str or dict
+            Key path string or flat dictionary — passed directly to
+            :meth:`update`.
+        value : float or list, optional
+            Value(s) to set.
+        q_index : int, str, or list, optional
+            Target qubit identifier(s).  ``None`` broadcasts to all qubits.
         """
         self.update(param, value, q_index)
 
@@ -370,30 +515,39 @@ class ExperimentConfig:
         q_index: Union[int, str, List] = None,
     ) -> None:
         """
-        Unified update method.
+        Unified update method supporting three addressing modes.
 
-        Mode 1: Dictionary Merge
-            update(flat_dict, q_index="Q1")
-            Merges a flat dictionary into the nested structure of the target qubit(s).
+        Mode 1 — Dictionary merge
+            ``update(flat_dict, q_index="Q1")``
+            Merges a flat dictionary into the nested structure of the target
+            qubit(s).
 
-        Mode 2: Auto-search (no dots)
-            update("qb_freq_ge", 5000, "Q1")
-            Automatically finds where the key lives inside the nested config
-            and updates it.  No need to specify the parent section.
+        Mode 2 — Auto-search (plain key, no dots)
+            ``update("qb_freq_ge", 5000, "Q1")``
+            Locates the key anywhere inside the nested config and updates it.
 
-        Mode 3: Explicit Path Update (dot notation)
-            update("qb.qb_freq_ge", 5000, "Q1")
-            Updates a specific nested key using dot notation string.
+        Mode 3 — Explicit dot-path
+            ``update("qb.qb_freq_ge", 5000, "Q1")``
+            Navigates to the exact nested location using dot notation.
+
+        When *value* is a list of the same length as the resolved target
+        indices, each qubit receives the corresponding element (distribute
+        mode); otherwise the same *value* is written to every target qubit.
 
         Parameters
         ----------
-        param : Union[str, Dict]
-            Either a key path string (e.g., 'qb_freq_ge' or 'qb.qb_freq_ge')
-            or a flat dictionary.
-        value : Any, optional
-            The value to set if param is a string. Ignored if param is a dict.
-        q_index : Union[int, str, List], optional
-            The target qubits. If None, targets all (broadcast/distribute).
+        param : str or dict
+            Either a key-path string (e.g. ``"qb_freq_ge"`` or
+            ``"qb.qb_freq_ge"``) or a flat dictionary to merge.
+        value : any, optional
+            Value to set when *param* is a string.  Ignored for dict mode.
+        q_index : int, str, or list, optional
+            Target qubit identifier(s).  ``None`` targets all qubits.
+
+        Raises
+        ------
+        TypeError
+            If *param* is neither a string nor a dict.
         """
         target_indices = self._resolve_indices(q_index)
 
@@ -524,13 +678,27 @@ class ExperimentConfig:
 
     def _find_key_path(self, nested, target_key, _path=()) -> Optional[tuple]:
         """
-        Recursively search for *target_key* in *nested* and return the tuple
-        of keys that leads to it, or None if not found.
+        Recursively search *nested* for *target_key* and return its key path.
 
-        Example::
+        Parameters
+        ----------
+        nested : dict or list
+            The nested structure to search.
+        target_key : str
+            The leaf key to locate.
+        _path : tuple, optional
+            Accumulated path of ancestor keys (used internally for recursion).
 
-            cfg = {'qb': {'qb_freq_ge': 5000}}
-            self._find_key_path(cfg, 'qb_freq_ge')  # -> ('qb', 'qb_freq_ge')
+        Returns
+        -------
+        path : tuple of str or None
+            Tuple of keys leading to *target_key*, or ``None`` if not found.
+
+        Examples
+        --------
+        >>> cfg = {'qb': {'qb_freq_ge': 5000}}
+        >>> self._find_key_path(cfg, 'qb_freq_ge')
+        ('qb', 'qb_freq_ge')
         """
         if isinstance(nested, dict):
             if target_key in nested:
@@ -549,7 +717,23 @@ class ExperimentConfig:
         return None
 
     def _recursive_update(self, nested_data, target_key, new_value) -> bool:
-        """Helper to recursively find a key in nested structure and update it."""
+        """
+        Recursively locate *target_key* in *nested_data* and update its value.
+
+        Parameters
+        ----------
+        nested_data : dict or list
+            Nested configuration structure to search.
+        target_key : str
+            Key to update.
+        new_value : any
+            Replacement value.
+
+        Returns
+        -------
+        found : bool
+            ``True`` if *target_key* was found and updated at least once.
+        """
         found = False
         if isinstance(nested_data, dict):
             if target_key in nested_data:
@@ -574,6 +758,20 @@ class ExperimentConfig:
         return found
 
     def read_config(self, q_id: Union[int, str]) -> Dict:
+        """
+        Return the cleaned nested configuration dict for a single qubit.
+
+        Parameters
+        ----------
+        q_id : int or str
+            Qubit index (0-based) or qubit name (e.g. ``"Q1"``).
+
+        Returns
+        -------
+        cfg : dict
+            Plain Python dict with NumPy scalars and ``QickParam`` objects
+            removed (via :meth:`_clean_data`).
+        """
         indices = self._resolve_indices(q_id)
         target_idx = indices[0]
         raw_nested_cfg = self._raw_list[target_idx]
@@ -581,7 +779,17 @@ class ExperimentConfig:
         return clean_data
 
     def save_to_py(self, filename: str = "latest_cfg.py") -> None:
-        """Export full configuration list to file."""
+        """
+        Export the full configuration list to a Python source file.
+
+        The output file defines ``DATA_PATH`` and ``config_list`` using
+        :func:`pprint.pprint` for readable formatting.
+
+        Parameters
+        ----------
+        filename : str, optional
+            Destination file path.  Defaults to ``"latest_cfg.py"``.
+        """
         from .system_cfg import DATA_PATH
 
         clean_data = self._clean_data(self._raw_list)
@@ -603,8 +811,18 @@ class ExperimentConfig:
         var_name: str = "config",
     ) -> None:
         """
-        Export the configuration of a specific qubit to a Python file.
-        Saves the original nested dictionary structure.
+        Export the nested configuration of a specific qubit to a Python file.
+
+        Parameters
+        ----------
+        q_id : int or str
+            Qubit index (0-based) or qubit name (e.g. ``"Q1"``).
+        filename : str, optional
+            Destination file path.  Defaults to ``"<name>_config.py"`` where
+            *name* is taken from the qubit's ``"name"`` field.
+        var_name : str, optional
+            Python variable name to use in the output file.  Default is
+            ``"config"``.
         """
         # 1. Resolve index and get nested config
         indices = self._resolve_indices(q_id)
@@ -633,9 +851,24 @@ class ExperimentConfig:
 
     def to_yaml(self, q_id: Union[int, str] = None) -> str:
         """
-        Convert the configuration to YAML format.
-        Args:
-            q_id: Optional qubit identifier (name or index) to filter the output.
+        Serialize the configuration to a human-readable YAML string.
+
+        Parameters
+        ----------
+        q_id : int or str, optional
+            Qubit identifier (name or 0-based index).  When provided, only
+            that qubit's config is serialized.  When ``None`` (default), all
+            qubits are serialized as a YAML list.
+
+        Returns
+        -------
+        yaml_str : str
+            YAML-formatted configuration string.
+
+        Raises
+        ------
+        ValueError
+            If *q_id* is provided but does not match any known qubit.
         """
         if q_id is not None:
             indices = self._resolve_indices(q_id)
@@ -675,10 +908,26 @@ class ExperimentConfig:
         self, data: dict, is_list_item: bool = False, indent: int = 0
     ) -> str:
         """
-        Helper to dump a dictionary with conditional spacing and recursive structure.
-        - If a value is a dict, it recurses.
-        - Simple lists are forced to flow-style [1, 2, 3].
-        - Proper spacing is applied between complex segments.
+        Recursively serialize *data* to YAML with context-aware blank lines.
+
+        Simple lists are rendered in flow style (``[1, 2, 3]``).  A blank line
+        is inserted between adjacent keys when either the current or the next
+        value is a dict or list (complex type).
+
+        Parameters
+        ----------
+        data : dict
+            Mapping to serialize.
+        is_list_item : bool, optional
+            When ``True``, the first key is prefixed with ``"- "`` to produce
+            valid YAML list-item syntax.  Default is ``False``.
+        indent : int, optional
+            Current indentation level (2 spaces per level).  Default is ``0``.
+
+        Returns
+        -------
+        yaml_str : str
+            YAML-formatted string for *data*.
         """
         if not isinstance(data, dict):
             if isinstance(data, list) and all(
@@ -745,10 +994,15 @@ class ExperimentConfig:
 
     def to_yaml_file(self, filename: str, q_id: Union[int, str] = None):
         """
-        Convert the configuration to YAML format and save to a file.
-        Args:
-            filename: The file path to save to.
-            q_id: Optional qubit identifier (name or index) to filter the output.
+        Serialize the configuration to YAML and write it to a file.
+
+        Parameters
+        ----------
+        filename : str
+            Destination file path.
+        q_id : int or str, optional
+            Qubit identifier to filter the output.  ``None`` (default)
+            exports all qubits.
         """
         yaml_str = self.to_yaml(q_id=q_id)
         if filename:
@@ -757,7 +1011,27 @@ class ExperimentConfig:
             print(f"Configuration saved to {filename}")
 
     def _resolve_indices(self, q_identifier) -> List[int]:
-        """Resolve indices from int, str, list or None."""
+        """
+        Resolve a qubit identifier to a list of integer indices.
+
+        Parameters
+        ----------
+        q_identifier : int, str, list, or None
+            Qubit name, 0-based integer index, list of either, or ``None``
+            to select all qubits.
+
+        Returns
+        -------
+        indices : list of int
+            Resolved integer indices into ``_raw_list``.
+
+        Raises
+        ------
+        ValueError
+            If a string identifier is not found in the name map.
+        TypeError
+            If *q_identifier* is an unsupported type.
+        """
         if q_identifier is None:
             return list(range(len(self._raw_list)))
         if isinstance(q_identifier, (int, np.integer)):
@@ -780,7 +1054,23 @@ class ExperimentConfig:
         raise TypeError("Invalid q_index type.")
 
     def _clean_data(self, data: Any) -> Any:
-        """Recursively clean data (Addict->dict, Numpy->native, filter QickParam)."""
+        """
+        Recursively convert *data* to plain Python types for serialization.
+
+        Removes ``QickParam`` values, converts ``addict.Dict`` to ``dict``,
+        NumPy arrays to lists, NumPy scalars to Python scalars, and complex
+        numbers to ``{"real": ..., "imag": ...}`` dicts.
+
+        Parameters
+        ----------
+        data : any
+            Arbitrary nested structure to clean.
+
+        Returns
+        -------
+        cleaned : any
+            Equivalent structure using only plain Python types.
+        """
         try:
             from qick.asm_v2 import QickParam
 
@@ -808,7 +1098,20 @@ class ExperimentConfig:
         return _clean(data)
 
     def _collect_all_key_values(self, data) -> defaultdict:
-        """Recursively collect all values for the same key."""
+        """
+        Recursively collect all leaf values grouped by key from *data*.
+
+        Parameters
+        ----------
+        data : dict, addict.Dict, or list
+            Nested configuration structure (typically ``_raw_list``).
+
+        Returns
+        -------
+        result : defaultdict of list
+            Mapping from each leaf key to a list of all values found for
+            that key across all nested dicts.
+        """
         result = defaultdict(list)
         if isinstance(data, (dict, AddictDict)):
             for key, value in data.items():
@@ -827,7 +1130,23 @@ class ExperimentConfig:
         return result
 
     def _refine_cfg(self, collected_data) -> AddictDict:
-        """Refine list to scalar and return as AddictDict."""
+        """
+        Collapse single-valued lists to scalars and wrap result in AddictDict.
+
+        For keys listed in :attr:`keys_to_unify`, if all collected values are
+        identical, the list is replaced by that single scalar value.
+
+        Parameters
+        ----------
+        collected_data : defaultdict of list
+            Output of :meth:`_collect_all_key_values`.
+
+        Returns
+        -------
+        refined : AddictDict
+            Unified config where unifiable keys hold scalars and the rest
+            hold lists (one entry per qubit).
+        """
         refined_dict = AddictDict(collected_data)
         for key, value_list in refined_dict.items():
             if (
@@ -862,7 +1181,34 @@ class ExperimentConfig:
 
 def auto_unit(value, base_unit=""):
     """
-    Automatically scale a value and add a metric prefix (e.g., k, M, G, m, u, n).
+    Scale a numeric value to the most appropriate SI metric prefix.
+
+    Determines the best SI prefix (pico through giga) by inspecting the
+    magnitude of *value* and returns both the scaled value and the combined
+    prefix + *base_unit* string.
+
+    Parameters
+    ----------
+    value : float or array-like
+        Numeric value(s) to scale.
+    base_unit : str, optional
+        Physical unit string to append after the metric prefix (e.g. ``"Hz"``
+        or ``"V"``).  Default is ``""`` (no unit).
+
+    Returns
+    -------
+    result : dict
+        Dictionary with two keys:
+
+        ``"value"`` : np.ndarray
+            Array of scaled values (same shape as *value*).
+        ``"unit"`` : str
+            Metric-prefixed unit string (e.g. ``"MHz"`` or ``"mV"``).
+
+    Examples
+    --------
+    >>> auto_unit(5_000_000, "Hz")
+    {'value': array([5.]), 'unit': 'MHz'}
     """
     prefixes = {
         -12: "p",  # pico

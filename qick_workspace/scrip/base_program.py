@@ -31,14 +31,38 @@ GATE_ALIAS = {
 
 
 def resolve_gate(name, prefix="ge"):
-    """Resolve shorthand gate name to actual pulse name.
+    """
+    Resolve a shorthand gate name to its fully-qualified pulse name.
 
-    Examples:
-        resolve_gate("X")      -> "x180_ge"
-        resolve_gate("-X/2")   -> "x90m_ge"
-        resolve_gate("x90")    -> "x90_ge"
-        resolve_gate("x180_ge") -> "x180_ge"  (pass-through)
-        resolve_gate("I")      -> "I"          (identity)
+    Parameters
+    ----------
+    name : str or None
+        Gate shorthand (e.g. ``"X"``, ``"-X/2"``, ``"x90"``) or a
+        fully-qualified pulse name (passed through unchanged).
+        ``"I"``, ``"-I"``, ``None``, and ``"None"`` are returned as-is
+        (identity gate — no pulse issued).
+    prefix : str, optional
+        Transition prefix to substitute for ``{pfx}`` in the template.
+        Default is ``"ge"``.
+
+    Returns
+    -------
+    pulse_name : str or None
+        Fully-qualified pulse name (e.g. ``"x180_ge"``), the original
+        identity sentinel, or the input unchanged if already qualified.
+
+    Examples
+    --------
+    >>> resolve_gate("X")
+    'x180_ge'
+    >>> resolve_gate("-X/2")
+    'x90m_ge'
+    >>> resolve_gate("x90")
+    'x90_ge'
+    >>> resolve_gate("x180_ge")
+    'x180_ge'
+    >>> resolve_gate("I")
+    'I'
     """
     if name in ("I", "-I", None, "None"):
         return name
@@ -49,23 +73,47 @@ def resolve_gate(name, prefix="ge"):
 
 class BaseProgram(AveragerProgramV2):
     """
-    Base class for all QICK programs.
+    Base class for all QICK programs in this framework.
 
-    Key helpers:
-    - declare_gen_auto()      : auto-handle mixer_freq for axis_sg_int4_v2
-    - setup_resonator()       : readout channel + pulse config
-    - setup_qubit_gen()       : qubit gen declaration (prefix-aware: ge/ef)
-    - setup_qb_pulse()        : flexible pulse (const/arb/flat_top, gauss/cosine)
-    - setup_standard_gates()  : 6 calibration gates for AllXY/RB/Tomography
-    - apply_cool()            : cooling channel + pulse config
-    - cooling_body()          : cooling pulse sequence for _body()
-    - measure()               : readout pulse + trigger
+    Centralises generator declaration, readout configuration, qubit pulse
+    setup (prefix-aware for ge/ef transitions), standard calibration gates,
+    active cooling, and the measurement trigger sequence.  Subclasses only
+    need to implement :meth:`_initialize` and :meth:`_body`.
+
+    Key helpers
+    -----------
+    - :meth:`declare_gen_auto` — auto-handle mixer_freq for axis_sg_int4_v2
+    - :meth:`setup_resonator` — readout channel + flat_top pulse config
+    - :meth:`setup_qubit_gen` — qubit generator declaration (prefix-aware)
+    - :meth:`setup_qb_pulse` — flexible pulse (const/arb/flat_top/drag)
+    - :meth:`setup_standard_gates` — 6 calibration gates for AllXY/RB/Tomography
+    - :meth:`apply_cool` — cooling channel + pulse config
+    - :meth:`cooling_body` — cooling pulse sequence for :meth:`_body`
+    - :meth:`measure` — readout pulse + trigger
     """
 
     # ── Generator helpers ──
 
     def declare_gen_auto(self, ch, nqz, mixer_key=None, cfg=None):
-        """Declare generator, auto-handling mixer_freq for axis_sg_int4_v2."""
+        """
+        Declare a generator, automatically injecting ``mixer_freq`` when needed.
+
+        For ``axis_sg_int4_v2`` generator tiles the QICK firmware requires an
+        explicit mixer frequency.  This helper checks the tile type and calls
+        ``declare_gen`` with or without ``mixer_freq`` accordingly.
+
+        Parameters
+        ----------
+        ch : int
+            Generator channel index.
+        nqz : int
+            Nyquist zone (1 or 2).
+        mixer_key : str, optional
+            Config key whose value gives the mixer frequency (MHz).  Only
+            used when the tile type is ``axis_sg_int4_v2``.
+        cfg : dict, optional
+            Experiment configuration dict used to look up *mixer_key*.
+        """
         if mixer_key and cfg and self.soccfg["gens"][ch]["type"] == "axis_sg_int4_v2":
             self.declare_gen(ch=ch, nqz=nqz, mixer_freq=cfg[mixer_key])
         else:
@@ -73,9 +121,20 @@ class BaseProgram(AveragerProgramV2):
 
     def setup_qubit_gen(self, cfg, prefix="ge"):
         """
-        Declare the qubit generator for a given prefix.
-        ge -> cfg["qb_ch"] / nqz_qb / qb_mixer
-        ef -> cfg["qb_ch_ef"] / nqz_qb_ef / qb_mixer_ef
+        Declare the qubit generator for a given transition prefix.
+
+        Selects channel, NQZ, and mixer keys based on *prefix*:
+
+        - ``"ge"`` → ``cfg["qb_ch"]`` / ``"nqz_qb"`` / ``"qb_mixer"``
+        - other   → ``cfg["qb_ch_{prefix}"]`` / ``"nqz_qb_{prefix}"`` /
+          ``"qb_mixer_{prefix}"``
+
+        Parameters
+        ----------
+        cfg : dict
+            Experiment configuration dict.
+        prefix : str, optional
+            Transition prefix.  Default is ``"ge"``.
         """
         if prefix == "ge":
             ch, nqz_key, mixer_key = cfg["qb_ch"], "nqz_qb", "qb_mixer"
@@ -92,7 +151,23 @@ class BaseProgram(AveragerProgramV2):
         cfg,
         prefix="ge",
     ):
-        """Configure resonator readout channel and flat_top pulse."""
+        """
+        Configure the resonator readout channel and flat_top readout pulse.
+
+        Declares the readout generator and ADC channel, adds a Gaussian
+        envelope, and registers a ``flat_top`` pulse named ``"res_pulse"``.
+
+        Parameters
+        ----------
+        cfg : dict
+            Experiment configuration dict.  Required keys: ``"ro_ch"``,
+            ``"res_ch"``, ``"nqz_res"``, ``"ro_length"``,
+            ``f"res_freq_{prefix}"``, ``"res_sigma"``, ``"res_length"``,
+            ``"res_phase"``, ``f"res_gain_{prefix}"``.
+        prefix : str, optional
+            Transition prefix used to select frequency and gain.
+            Default is ``"ge"``.
+        """
         ro_ch = cfg["ro_ch"]
         res_ch = cfg["res_ch"]
         self.declare_gen(ch=res_ch, nqz=cfg["nqz_res"])
@@ -135,24 +210,55 @@ class BaseProgram(AveragerProgramV2):
         length_mult=5,
     ):
         """
-        Configure a qubit pulse with automatic channel/gain/phase resolution.
-        Envelopes are deduplicated: multiple pulses with same prefix+shape
-        share one envelope.
+        Configure a qubit pulse with automatic channel, gain, and phase resolution.
 
-        Args:
-            cfg:          configuration dict
-            prefix:       'ge' or 'ef' — selects channel, freq, sigma keys
-            pulse_type:   'const', 'arb', 'flat_top', or 'drag'
-                          (default: cfg["pulse_type"]; 'drag' uses DRAG envelope + arb style)
-            shape:        envelope shape for arb/flat_top — 'gauss', 'cosine', or 'drag'
-                          (ignored when pulse_type='drag', which forces shape='drag')
-            name:         pulse name
-            phase:        phase in degrees (default: cfg["qb_phase"])
-            gain_key:     explicit cfg key for gain (default: f"qb_gain_{prefix}")
-            gain_override: explicit gain value (overrides gain_key when not None)
-            ch:           explicit channel override
-            length_mult:  gauss/drag envelope length = sigma * length_mult (default 5)
-                          cosine envelope length = sigma
+        Envelopes are deduplicated: multiple pulses sharing the same
+        ``(channel, prefix, shape)`` combination reuse a single registered
+        envelope to avoid redundant ``add_*`` calls.
+
+        Parameters
+        ----------
+        cfg : dict
+            Experiment configuration dict.
+        prefix : str, optional
+            Transition prefix (``"ge"`` or ``"ef"``).  Selects channel,
+            frequency, sigma, and gain keys.  Default is ``"ge"``.
+        pulse_type : str, optional
+            Pulse style: ``"const"``, ``"arb"``, ``"flat_top"``, or
+            ``"drag"``.  When ``None``, falls back to
+            ``cfg.get("pulse_type", "arb")``.  The ``"drag"`` type forces
+            *shape* to ``"drag"`` and uses ``"arb"`` style internally.
+        shape : str, optional
+            Envelope shape for ``"arb"`` / ``"flat_top"`` pulses: ``"gauss"``,
+            ``"cosine"``, or ``"drag"``.  Ignored when *pulse_type* is
+            ``"drag"`` (which forces ``shape="drag"``).  Default is
+            ``"gauss"``.
+        name : str, optional
+            Name to register the pulse under.  Default is ``"qb_pulse"``.
+        phase : float, optional
+            Pulse phase in degrees.  Defaults to ``cfg["qb_phase"]``.
+        gain_key : str, optional
+            Explicit config key for the gain value.  Defaults to
+            ``f"qb_gain_{prefix}"``.
+        gain_override : float or int, optional
+            Explicit gain value.  Takes precedence over *gain_key* when
+            provided.
+        ch : int, optional
+            Explicit channel override.  Defaults to ``cfg["qb_ch"]`` (ge) or
+            ``cfg[f"qb_ch_{prefix}"]`` (other prefixes).
+        length_mult : int, optional
+            Gaussian / DRAG envelope length multiplier: length = sigma *
+            length_mult.  Cosine envelopes always use length = sigma.
+            Default is ``5``.
+
+        Raises
+        ------
+        KeyError
+            If ``"drag_alpha"`` is missing from *cfg* when *pulse_type* is
+            ``"drag"``.
+        ValueError
+            If *shape* is not one of ``"gauss"``, ``"cosine"``, or
+            ``"drag"``.
         """
         # Resolve channel
         if ch is None:
@@ -260,8 +366,24 @@ class BaseProgram(AveragerProgramV2):
 
     def setup_standard_gates(self, cfg, prefix="ge", pulse_type=None, shape="gauss"):
         """
-        Setup 6 standard calibration gates for AllXY, RB, State Tomography:
-        X180, Y180, X90, X90m, Y90, Y90m.
+        Register the six standard calibration gates for AllXY, RB, and tomography.
+
+        Gates registered: X180, Y180, X90, X90m (−X90), Y90, Y90m (−Y90).
+        Each gate is added via :meth:`setup_qb_pulse` with the appropriate
+        phase and gain key.
+
+        Parameters
+        ----------
+        cfg : dict
+            Experiment configuration dict.
+        prefix : str, optional
+            Transition prefix.  Default is ``"ge"``.
+        pulse_type : str, optional
+            Forwarded to :meth:`setup_qb_pulse`.  ``None`` uses the config
+            default.
+        shape : str, optional
+            Envelope shape forwarded to :meth:`setup_qb_pulse`.
+            Default is ``"gauss"``.
         """
         gates = [
             (f"x180_{prefix}", 0, f"pi_gain_{prefix}"),
@@ -286,8 +408,21 @@ class BaseProgram(AveragerProgramV2):
 
     def apply_cool(self, cfg, style="flat_top"):
         """
-        Configure cooling channels and pulses.
-        style: "flat_top" (most experiments) or "const" (legacy).
+        Configure active-reset cooling channels and pulses.
+
+        Iterates over ``cool_ch1`` and ``cool_ch2`` in *cfg* and declares
+        each channel's generator and pulse.
+
+        Parameters
+        ----------
+        cfg : dict
+            Experiment configuration dict.  Required keys per channel:
+            ``f"cool_ch{i}"``, ``f"nqz_cool_ch{i}"`` (optional, default 2),
+            ``f"cool_mixer{i}"``, ``"res_sigma"``, ``"cool_length"``,
+            ``f"cool_freq_{i}"``, ``f"cool_gain_{i}"``.
+        style : str, optional
+            Pulse style: ``"flat_top"`` (default, most experiments) or
+            ``"const"`` (legacy).
         """
         for i in [1, 2]:
             ch_key = f"cool_ch{i}"
@@ -329,7 +464,24 @@ class BaseProgram(AveragerProgramV2):
                 )
 
     def cooling_body(self, cfg, ring_down=0.5):
-        """Execute cooling pulse sequence inside _body(). Returns True if cooling ran."""
+        """
+        Execute the active-reset cooling pulse sequence inside ``_body``.
+
+        Parameters
+        ----------
+        cfg : dict
+            Experiment configuration dict.  Must contain ``"cooling"`` (bool)
+            and ``"cool_ch1"`` / ``"cool_ch2"`` keys.
+        ring_down : float, optional
+            Delay in microseconds after the cooling pulses to allow cavity
+            ring-down.  Default is ``0.5`` µs.
+
+        Returns
+        -------
+        ran : bool
+            ``True`` if cooling was executed, ``False`` if
+            ``cfg["cooling"]`` is falsy.
+        """
         if not cfg.get("cooling", False):
             return False
         self.pulse(ch=cfg["cool_ch1"], name="cool_pulse1", t=0)
@@ -340,6 +492,14 @@ class BaseProgram(AveragerProgramV2):
     # ── Measurement ──
 
     def measure(self, cfg):
-        """Execute standard readout pulse + trigger."""
+        """
+        Execute the standard readout pulse and ADC trigger.
+
+        Parameters
+        ----------
+        cfg : dict
+            Experiment configuration dict.  Required keys: ``"res_ch"``,
+            ``"ro_ch"``, ``"trig_time"``.
+        """
         self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
         self.trigger(ros=[cfg["ro_ch"]], pins=[0], t=cfg["trig_time"])

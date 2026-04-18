@@ -40,7 +40,72 @@ def liveplotfun(
 ):
     """
     General-purpose live plotter (Facade pattern).
-    Dispatches to specialized internal functions based on provided arguments.
+
+    Dispatches to one of four specialized internal routines based on the
+    combination of arguments supplied:
+
+    - **Yoko sweep** (``yoko_inst_addr`` is set): outer loop steps a
+      Yokogawa source while the inner QICK program sweeps ``x_axis_vals``.
+    - **2D parameter scan** (``scan_x_axis`` and ``scan_y_axis`` both set):
+      a callback generates a fresh program for every (x, y) grid point.
+    - **1D parameter scan** (only ``scan_x_axis`` set): a callback generates
+      a fresh program for each x point.
+    - **Software averaging** (default): repeats a fixed program ``py_avg``
+      times and accumulates a running average.
+
+    Parameters
+    ----------
+    prog : object, optional
+        Pre-compiled QICK program (used in sw_avg and yoko modes).
+    soc : object, optional
+        QICK SoC instance required for hardware acquisition.
+    py_avg : int, optional
+        Number of software averaging repetitions.  Default is ``1``.
+    x_axis_vals : np.ndarray, optional
+        X-axis values for sw_avg mode (1-D or fast axis of 2-D); or the
+        inner sweep array for yoko mode.
+    y_axis_vals : np.ndarray, optional
+        Y-axis values for 2-D sw_avg mode; or Yoko output values for yoko
+        mode.
+    x_label : str, optional
+        X-axis label.  Default is ``"X Axis"``.
+    y_label : str, optional
+        Y-axis label.  Default is ``"Y Axis"``.
+    title_prefix : str, optional
+        Prefix shown in the figure title.  Default is ``"Experiment"``.
+    yoko_inst_addr : str, optional
+        VISA address of the Yokogawa source (e.g. ``"GPIB0::1::INSTR"``).
+        When set, selects Yoko sweep mode.
+    yoko_mode : str, optional
+        ``"current"`` or ``"voltage"``.  Default is ``"current"``.
+    scan_x_axis : np.ndarray, optional
+        Parameter values for the fast (x) axis of a parameter scan.
+    scan_y_axis : np.ndarray, optional
+        Parameter values for the slow (y) axis of a 2-D parameter scan.
+    get_prog_callback : callable, optional
+        Function called with ``(x_val,)`` (1-D) or ``(x_val, y_val)`` (2-D)
+        that returns a ready-to-run QICK program.
+    show_final_plot : bool, optional
+        Whether to render a final static figure after acquisition.
+        Default is ``True``.
+    iq_process : str, optional
+        ``"abs"`` for amplitude or ``"real"`` for the I-quadrature.
+        Default is ``"abs"``.
+
+    Returns
+    -------
+    iqdata : np.ndarray
+        Averaged complex IQ data (shape depends on mode).
+    interrupted : bool
+        ``True`` if the loop was stopped early by ``KeyboardInterrupt``.
+    n_done : int
+        Number of completed averages or Yoko steps.
+
+    Raises
+    ------
+    ValueError
+        If ``yoko_inst_addr`` is set but ``y_axis_vals`` is ``None``, or if
+        ``scan_x_axis`` is set but ``get_prog_callback`` is ``None``.
     """
 
     # Mode 1: Yoko Parameter Sweep
@@ -123,9 +188,43 @@ def _liveplot_sw_avg(
     iq_process="abs",
 ):
     """
-    [Internal function] Executes a software-averaged live plot (1D or 2D) using a separate, persistent thread
-    for non-blocking visualization. Utilizes a producer-consumer pattern with frame dropping to ensure
-    data acquisition speed is not bottlenecked by rendering performance.
+    Execute a software-averaged live plot using a dedicated plotter thread.
+
+    Implements a producer-consumer pattern with a LIFO queue (max size 1)
+    so that rendering never stalls data acquisition: when the queue is full,
+    the stale frame is dropped and the latest frame takes its place.
+
+    Parameters
+    ----------
+    prog : object
+        Compiled QICK program.
+    soc : object
+        QICK SoC instance.
+    py_avg : int
+        Number of software averages.
+    x_axis_vals : np.ndarray
+        X-axis values for the sweep.
+    y_axis_vals : np.ndarray, optional
+        Y-axis values for a 2-D sweep.  When ``None``, a 1-D plot is used.
+    x_label : str, optional
+        X-axis label.
+    y_label : str, optional
+        Y-axis label (2-D mode only).
+    title_prefix : str, optional
+        Figure title prefix.
+    show_final_plot : bool, optional
+        Render a static final figure after completion.  Default is ``False``.
+    iq_process : str, optional
+        ``"abs"`` or ``"real"``.  Default is ``"abs"``.
+
+    Returns
+    -------
+    iqdata : np.ndarray or None
+        Running-averaged complex IQ data, or ``None`` if no data was acquired.
+    interrupted : bool
+        ``True`` if stopped early by ``KeyboardInterrupt``.
+    n_done : int
+        Number of completed averages.
     """
     # Use a LIFO queue with maxsize=1 to always prefer the latest data frame, implementing "frame dropping"
     data_queue = queue.LifoQueue(maxsize=1)
@@ -302,6 +401,47 @@ def _liveplot_sweep_yoko(
     title_prefix="Experiment",
     iq_process="abs",
 ):
+    """
+    Execute a 2-D live plot while sweeping a Yokogawa source on the outer axis.
+
+    For each Yoko output level the QICK program is run ``py_avg`` times via
+    ``prog.acquire(..., rounds=py_avg)`` and a pcolormesh is updated after
+    every row.
+
+    Parameters
+    ----------
+    prog : object
+        Compiled QICK program (inner sweep must be embedded in the program).
+    soc : object
+        QICK SoC instance.
+    py_avg : int
+        Hardware averaging rounds per Yoko step.
+    x_axis_vals : np.ndarray
+        Inner sweep values (plotted on the Y axis of the heatmap).
+    y_axis_vals_yoko : np.ndarray
+        Yokogawa output values forming the outer loop (plotted on X axis).
+    yoko_inst_addr : str
+        VISA address of the Yokogawa instrument.
+    yoko_mode : str, optional
+        ``"current"`` or ``"voltage"``.  Default is ``"current"``.
+    x_label : str, optional
+        Label for the inner sweep axis.
+    y_label : str, optional
+        Label for the Yoko axis.
+    title_prefix : str, optional
+        Figure title prefix.
+    iq_process : str, optional
+        ``"abs"`` or ``"real"``.  Default is ``"abs"``.
+
+    Returns
+    -------
+    iqdata_full : np.ndarray
+        Complex IQ data of shape ``(len(y_axis_vals_yoko), len(x_axis_vals))``.
+    interrupted : bool
+        ``True`` if stopped early by ``KeyboardInterrupt``.
+    n_done : int
+        Number of completed Yoko steps.
+    """
     _proc = np.real if iq_process == "real" else np.abs
 
     rm = pyvisa.ResourceManager()
@@ -442,8 +582,41 @@ def _liveplot_1d_scan(
     iq_process="abs",
 ):
     """
-    [Internal function] Executes a 1D parameter scan (e.g., Length Rabi) with live plotting.
-    'get_prog_callback' is a function that takes a single value from 'scan_x_axis' and returns a ready-to-run program.
+    Execute a 1-D parameter scan with live plotting.
+
+    At each software average iteration, calls *get_prog_callback* for every
+    x-value to obtain a freshly configured QICK program, acquires one shot,
+    and accumulates a running average across all averages.
+
+    Parameters
+    ----------
+    soc : object
+        QICK SoC instance.
+    py_avg : int
+        Number of software averaging repetitions.
+    scan_x_axis : np.ndarray
+        Parameter values for the x axis (e.g. pulse lengths).
+    get_prog_callback : callable
+        Function with signature ``callback(x_val) → program`` that returns a
+        ready-to-run QICK program for the given parameter value.
+    x_label : str, optional
+        X-axis label.  Default is ``"Scan Parameter"``.
+    title_prefix : str, optional
+        Figure title prefix.  Default is ``"1D Scan"``.
+    show_final_plot : bool, optional
+        Render a static final figure after completion.  Default is ``True``.
+    iq_process : str, optional
+        ``"abs"`` or ``"real"``.  Default is ``"abs"``.
+
+    Returns
+    -------
+    iqdata : np.ndarray or None
+        Running-averaged complex IQ data of shape ``(len(scan_x_axis),)``,
+        or ``None`` if no data was acquired.
+    interrupted : bool
+        ``True`` if stopped early by ``KeyboardInterrupt``.
+    n_done : int
+        Number of completed averages.
     """
     _proc = np.real if iq_process == "real" else np.abs
     _y_label_proc = "ADC Units (Real)" if iq_process == "real" else "ADC Units (Abs)"
@@ -550,8 +723,46 @@ def _liveplot_2d_scan(
     iq_process="abs",
 ):
     """
-    [Internal function] Executes a 2D software parameter scan with live plotting.
-    'get_prog_callback' is a function that takes (x_val, y_val) and returns a ready-to-run program.
+    Execute a 2-D software parameter scan with live pcolormesh updating.
+
+    Iterates over all (y, x) grid points, calling *get_prog_callback* for
+    each point to obtain a fresh QICK program, then acquires ``py_avg``
+    hardware rounds.  The heatmap color scale adapts to measured data only,
+    so unmeasured cells (initialized to zero) do not distort the range.
+
+    Parameters
+    ----------
+    soc : object
+        QICK SoC instance.
+    py_avg : int
+        Hardware averaging rounds per grid point (passed as ``rounds``).
+    scan_x_axis : np.ndarray
+        Fast (inner) axis parameter values.
+    scan_y_axis : np.ndarray
+        Slow (outer) axis parameter values.
+    get_prog_callback : callable
+        Function with signature ``callback(x_val, y_val) → program`` that
+        returns a ready-to-run QICK program.
+    x_label : str, optional
+        X-axis label.  Default is ``"X Axis"``.
+    y_label : str, optional
+        Y-axis label.  Default is ``"Y Axis"``.
+    title_prefix : str, optional
+        Figure title prefix.  Default is ``"2D Scan"``.
+    show_final_plot : bool, optional
+        Display the final static heatmap after completion.  Default is
+        ``True``.
+    iq_process : str, optional
+        ``"abs"`` or ``"real"``.  Default is ``"abs"``.
+
+    Returns
+    -------
+    iqdata_full : np.ndarray
+        Complex IQ data of shape ``(len(scan_y_axis), len(scan_x_axis))``.
+    interrupted : bool
+        ``True`` if stopped early by ``KeyboardInterrupt``.
+    py_avg : int
+        The hardware averaging rounds value (returned for bookkeeping).
     """
     _proc = np.real if iq_process == "real" else np.abs
     _colorbar_label = "ADC Units (Real)" if iq_process == "real" else "ADC Units (Abs)"

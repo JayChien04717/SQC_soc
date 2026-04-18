@@ -28,7 +28,37 @@ marker_cycle    = ["o", "*", "s", "^"]
 
 def plot_hist(data, bins, ax=None, xlims=None, color=None, linestyle=None,
               label=None, alpha=None, normalize=True):
-    """Draw a step histogram onto *ax*."""
+    """
+    Draw a step histogram onto *ax*.
+
+    Parameters
+    ----------
+    data : array-like
+        1-D data to histogram.
+    bins : int
+        Number of histogram bins.
+    ax : matplotlib.axes.Axes or None, optional
+        Axes to draw onto.  Must be provided.
+    xlims : [float, float] or None, optional
+        Range passed to ``np.histogram``.
+    color : str or None, optional
+        Line colour; cycles through default prop-cycle if None.
+    linestyle : str or None, optional
+        Line style string (e.g. ``"solid"``).
+    label : str or None, optional
+        Legend label for the first bin segment.
+    alpha : float or None, optional
+        Line opacity.
+    normalize : bool, optional
+        Divide bin counts by total count so area sums to 1.
+
+    Returns
+    -------
+    hist_data : ndarray
+        Bin heights (normalised if ``normalize=True``).
+    bin_edges : ndarray
+        Bin edge positions, length ``bins + 1``.
+    """
     if color is None:
         color = next(cycle(default_colors))
     hist_data, bin_edges = np.histogram(data, bins=bins, range=xlims)
@@ -55,11 +85,24 @@ def plot_hist(data, bins, ax=None, xlims=None, color=None, linestyle=None,
 
 def _bic_gmm(X, max_components=2, n_init=5):
     """
-    Fit 1..max_components GMMs on 1-D data X and return the one with
-    lowest BIC (Bayesian Information Criterion).
+    Fit 1..max_components GMMs on 1-D data X and return the one with lowest BIC.
 
     BIC penalises model complexity, so it selects 2 components only when
     the data is genuinely bimodal (e.g. T1-decay tail on |e⟩).
+
+    Parameters
+    ----------
+    X : ndarray of shape (N, 1)
+        1-D data reshaped for sklearn.
+    max_components : int, optional
+        Maximum number of Gaussian components to try.
+    n_init : int, optional
+        Number of GMM random restarts per candidate k.
+
+    Returns
+    -------
+    best_gmm : GaussianMixture
+        Fitted GMM with the lowest BIC score.
     """
     best_gmm, best_bic = None, np.inf
     for k in range(1, max_components + 1):
@@ -108,20 +151,27 @@ def _fit_gmm(I_projs, xlims, n_init=5, max_components=2):
         Rotated I-axis projections, one array per prepared state.
     xlims : [float, float]
         Search window for threshold finding.
-    n_init : int
+    n_init : int, optional
         GMM random restarts per candidate k.
-    max_components : int
-        Maximum number of Gaussian components for non-ground states (default 2).
+    max_components : int, optional
+        Maximum number of Gaussian components for non-ground states.
 
     Returns
     -------
-    state_gmms  : list[GaussianMixture]  – one fitted GMM per state
-    state_order : ndarray                – state indices sorted by primary mean
-    conf_matrix : ndarray (n_states, n_states)
-    thresholds  : list[float]
-    primary_means : ndarray              – dominant component mean per state
-    primary_stds  : ndarray              – dominant component std  per state
-    primary_weights : ndarray            – dominant component weight per state
+    state_gmms : list of GaussianMixture
+        One fitted GMM per state.
+    state_order : ndarray
+        State indices sorted by primary mean (left to right in histogram).
+    conf_matrix : ndarray of shape (n_states, n_states)
+        Confusion matrix with fractional entries.
+    thresholds : list of float
+        Decision boundaries between adjacent states.
+    primary_means : ndarray
+        Dominant component mean per state.
+    primary_stds : ndarray
+        Dominant component standard deviation per state.
+    primary_weights : ndarray
+        Dominant component weight per state.
     """
     n_states = len(I_projs)
 
@@ -239,47 +289,53 @@ def general_hist(iqshots, state_labels, g_states, e_states, e_label="e",
 
     Parameters
     ----------
-    iqshots : list of (I, Q) array pairs
-        One pair per prepared state, ordered [g, e] or [g, e, f, ...].
-    state_labels : list[str]
+    iqshots : list of tuple of ndarray
+        One (I, Q) pair per prepared state, ordered [g, e] or [g, e, f, ...].
+    state_labels : list of str
         Display labels corresponding to *iqshots*.
-    g_states : list[int]
+    g_states : list of int
         Indices in *iqshots* representing the ground state.
-    e_states : list[int]
+    e_states : list of int
         Indices in *iqshots* representing the first excited state.
-    e_label : str
-        Label for the excited state (default "e").
-    check_qubit_label : int or None
-        Appended to the figure title as "on Q<n>".
-    numbins : int
+    e_label : str, optional
+        Label for the excited state (default ``"e"``).
+    check_qubit_label : int or None, optional
+        Appended to the figure title as ``"on Q<n>"``.
+    numbins : int, optional
         Number of histogram bins.
-    amplitude_mode : bool
-        Use |IQ| amplitude instead of rotated I projection.
-    ps_threshold : float or None
+    amplitude_mode : bool, optional
+        Use ``|IQ|`` amplitude instead of rotated I projection.
+    ps_threshold : float or None, optional
         Extra vertical marker on the histogram (e.g. post-selection cut).
-    theta : float or None
-        IQ rotation angle in degrees.  None → auto-computed from g/e means.
-    plot : bool
+    theta : float or None, optional
+        IQ rotation angle in degrees.  None triggers auto-computation from g/e means.
+    plot : bool, optional
         Produce the 4-panel figure.
-    verbose : bool
+    verbose : bool, optional
         Print numerical results.
-    fid_avg : bool
+    fid_avg : bool, optional
         API-compatibility flag; no effect (confusion-matrix fidelity is always
         the mean diagonal).
-    normalize : bool
-        Normalise histogram bins (passed through to plot_hist).
-    title : str or None
+    normalize : bool, optional
+        Normalise histogram bins (passed through to ``plot_hist``).
+    title : str or None, optional
         Override figure suptitle.
-    export : bool
-        Save figure to 'multihist.jpg' and close instead of plt.show().
+    export : bool, optional
+        Save figure to ``'multihist.jpg'`` and close instead of ``plt.show()``.
 
     Returns
     -------
-    list : [fids, thresholds, angle_deg, conf_matrix_pct]
-        *fids*            – [F] where F is the mean confusion-matrix diagonal (0–1)
-        *thresholds*      – decision boundaries between GMM components
-        *angle_deg*       – IQ rotation angle used (degrees)
-        *conf_matrix_pct* – (n_states × n_states) confusion matrix in %
+    list
+        ``[fids, thresholds, angle_deg, conf_matrix_pct]``
+
+        fids : list of float
+            ``[F]`` where F is the mean confusion-matrix diagonal (0–1).
+        thresholds : list of float
+            Decision boundaries between GMM components.
+        angle_deg : float
+            IQ rotation angle used (degrees).
+        conf_matrix_pct : ndarray of shape (n_states, n_states)
+            Confusion matrix in percent.
     """
     if not _HAS_SKLEARN:
         raise ImportError(
@@ -528,12 +584,37 @@ def hist(data, amplitude_mode=False, ps_threshold=None, theta=None,
          plot=True, verbose=True, fid_avg=False,
          normalize=True, title=None, export=False):
     """
-    Wrapper around general_hist for the standard IQ-dict format.
+    Wrapper around ``general_hist`` for the standard IQ-dict format.
 
     Parameters
     ----------
     data : dict
-        Keys: 'Ig', 'Qg', 'Ie', 'Qe'.  Optionally 'If', 'Qf' for f-state.
+        Keys: ``'Ig'``, ``'Qg'``, ``'Ie'``, ``'Qe'``.
+        Optionally ``'If'``, ``'Qf'`` for f-state.
+    amplitude_mode : bool, optional
+        Use ``|IQ|`` amplitude instead of rotated I projection.
+    ps_threshold : float or None, optional
+        Extra vertical marker on the histogram.
+    theta : float or None, optional
+        IQ rotation angle in degrees.  None triggers auto-computation.
+    plot : bool, optional
+        Produce the 4-panel figure.
+    verbose : bool, optional
+        Print numerical results.
+    fid_avg : bool, optional
+        API-compatibility flag; no effect.
+    normalize : bool, optional
+        Normalise histogram bins.
+    title : str or None, optional
+        Override figure suptitle.
+    export : bool, optional
+        Save figure to ``'multihist.jpg'`` and close.
+
+    Returns
+    -------
+    list
+        ``[fids, thresholds, angle_deg, conf_matrix_pct]`` — see
+        ``general_hist`` for details.
     """
     iqshots      = [(data["Ig"], data["Qg"]), (data["Ie"], data["Qe"])]
     state_labels = ["g", "e"]

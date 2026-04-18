@@ -94,12 +94,13 @@ class RBAsmProgram(BaseProgram):
     """
     RB program using ASMv2 gate dispatch.
 
-    compile_datamem() encodes the gate sequence into data memory (dmem).
-    _body() implements a hardware dispatch loop:
-        read gate_code from dmem → cond_jump to the corresponding gate block.
+    ``compile_datamem()`` encodes the gate sequence into data memory (dmem).
+    ``_body()`` implements a hardware dispatch loop:
+    read gate_code from dmem then cond_jump to the corresponding gate block.
     """
 
     def _initialize(self, cfg):
+        """Set up resonator, qubit generator, standard gates, and dispatch registers."""
         prefix = cfg.get("prefix", "ge")
         self.setup_resonator(cfg, prefix=prefix)
         self.setup_qubit_gen(cfg, prefix=prefix)
@@ -115,21 +116,24 @@ class RBAsmProgram(BaseProgram):
 
     def compile_datamem(self):
         """
-        Override QickProgramV2.compile_datamem() 以靜態初始化 dmem。
+        Override ``QickProgramV2.compile_datamem()`` to statically initialise dmem.
 
-        將 gate_seq 編碼為整數陣列寫入 dmem，末尾附上 END sentinel (=7)。
-        這樣不消耗 pmem — dmem 是獨立的 binary 區段，由 QICK 框架在
-        prog.acquire() 時上傳到 tProc 資料記憶體。
+        Encodes the gate sequence as an integer array written to dmem with an
+        END sentinel (code 7) appended.  This does not consume pmem — dmem is
+        an independent binary segment uploaded to tProc data memory at acquire
+        time by the QICK framework.
 
         Returns
         -------
-        np.ndarray of int64  (dmem 初始值)
+        codes : ndarray of int64
+            dmem initialisation array.
         """
         gate_seq = self.cfg["gate_seq"]
         codes = [_GATE_CODES[g] for g in gate_seq] + [_END_CODE]
         return np.array(codes, dtype=np.int64)
 
     def _body(self, cfg):
+        """Implement the ASMv2 gate-dispatch loop and final measurement."""
         pfx = cfg.get("prefix", "ge")
 
         # ── 計算每個 gate 的固定時間槽 ─────────────────────────────────
@@ -241,15 +245,26 @@ class RBAsmProgram(BaseProgram):
 # ====================================================== #
 class RandomizedBenchmarkingAsm:
     """
-    與 RandomizedBenchmarking 相同的執行邏輯，
-    但使用 RBAsmProgram（ASMv2 dispatch）代替原版 RBProgram。
+    RB experiment using ASMv2 gate dispatch (constant pmem regardless of depth).
 
-    pmem 大小不隨電路深度增長；適合需要長電路（depth > 50）的實驗。
-    注意：每個 circuit 仍需呼叫 prog.acquire() 重新編譯（compile_datamem()
-    是 binprog 的一部分），不可跳過。
+    Same execution logic as ``RandomizedBenchmarking`` but uses
+    ``RBAsmProgram`` so program memory size does not grow with circuit depth.
+    Each circuit still requires a ``prog.acquire()`` call for recompilation
+    because ``compile_datamem()`` is part of the binary program.
     """
 
     def __init__(self, config):
+        """
+        Parameters
+        ----------
+        config : dict
+            Experiment configuration dictionary.
+
+        Raises
+        ------
+        RuntimeError
+            If ``BaseExperiment.setup()`` has not been called first.
+        """
         from .base_experiment import BaseExperiment
         if BaseExperiment._soc is None:
             raise RuntimeError("Call BaseExperiment.setup(soc, soccfg, data_path) first.")
@@ -273,6 +288,35 @@ class RandomizedBenchmarkingAsm:
         iq_process="abs",
         randomize_depth_order=False,
     ):
+        """
+        Acquire RB or IRB data using the ASMv2 dispatch program.
+
+        Parameters
+        ----------
+        py_avg : int
+            Hardware averages (rounds) per circuit.
+        max_circuit_depth : int
+            Maximum Clifford depth (exclusive upper bound).
+        delta_clifford : int
+            Step size between circuit depths.
+        number_sample : int
+            Number of random circuit samples per depth point.
+        interleaved_gate : str or None, optional
+            Gate name for IRB, or ``None`` for standard RB.
+        seed : int or None, optional
+            Random seed for reproducibility.
+        prefix : str, optional
+            Gate prefix (``"ge"`` or ``"ef"``).
+        iq_process : str, optional
+            IQ processing mode: ``"abs"`` or ``"real"``.
+        randomize_depth_order : bool, optional
+            Measure circuit depths in random order to average out time drift.
+
+        Raises
+        ------
+        ValueError
+            If ``interleaved_gate`` is not in the supported gate set.
+        """
         self._iq_process = iq_process
         self.x = np.arange(1, max_circuit_depth, delta_clifford)
         self._number_sample = number_sample
@@ -327,6 +371,25 @@ class RandomizedBenchmarkingAsm:
         self.rb_result = rb_result
 
     def saveLabber(self, qb_idx, config_all=None, yoko_value=None, title=None):
+        """
+        Save RB data to an HDF5/Labber file.
+
+        Parameters
+        ----------
+        qb_idx : int
+            Qubit index appended to the experiment name.
+        config_all : object or None, optional
+            Full config object with a ``to_yaml(q_id)`` method.
+        yoko_value : float or None, optional
+            Yokogawa flux bias value embedded in the filename.
+        title : str or None, optional
+            Custom title string for the saved file name.
+
+        Raises
+        ------
+        RuntimeError
+            If ``run()`` has not been called first.
+        """
         if self.x is None or self.rb_result is None:
             raise RuntimeError("Must call run() before saveLabber().")
 
@@ -358,6 +421,40 @@ class RandomizedBenchmarkingAsm:
         print(f"RB data saved to {file_path}")
 
     def plot(self, label, color=None, ax=None, marker="o", show_individual=False):
+        """
+        Fit and plot the RB decay curve.
+
+        Parameters
+        ----------
+        label : str
+            Legend label for this curve.
+        color : str or None, optional
+            Line and marker colour.  Defaults to ``"steelblue"``.
+        ax : matplotlib.axes.Axes or None, optional
+            Axes to plot into.  A new figure is created when ``None``.
+        marker : str, optional
+            Marker style for the average data points.
+        show_individual : bool, optional
+            Whether to show individual circuit samples as scatter points.
+
+        Returns
+        -------
+        epc : float
+            Error per Clifford.
+        epc_err : float
+            One-sigma uncertainty on EPC.
+        p_fit : float
+            Fitted decay parameter.
+        p_fit_err : float
+            One-sigma uncertainty on the decay parameter.
+        pCov : ndarray
+            Covariance matrix from the fit.
+
+        Raises
+        ------
+        RuntimeError
+            If ``run()`` has not been called first.
+        """
         if self.x is None or self.rb_result is None:
             raise RuntimeError("Must call run() before plot().")
 

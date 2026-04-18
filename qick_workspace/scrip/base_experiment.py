@@ -18,23 +18,30 @@ class BaseExperiment:
     """
     Base class for all experiment wrappers.
 
-    Session initialisation (call once per notebook):
+    Provides a unified ``run`` → liveplot → ``_post_fit`` → ``saveLabber``
+    pipeline.  Subclasses declare class-level metadata and override a small
+    set of hook methods.
+
+    Session initialisation (call once per notebook)::
+
         BaseExperiment.setup(soc, soccfg, data_path)
 
-    Subclasses need to:
-    1. Set class-level metadata attributes (EXPT_NAME, TAG, X_LABEL, etc.)
-    2. Override _create_program() — return the Program instance
-    3. Override _extract_sweep_axis(prog) — return the sweep axis array
-    4. Optionally override _post_fit() — perform fitting after liveplot
+    Subclass contract
+    -----------------
+    1. Set class-level metadata attributes (``EXPT_NAME``, ``TAG``,
+       ``X_LABEL``, etc.).
+    2. Override :meth:`_create_program` — return the ``Program`` instance.
+    3. Override :meth:`_extract_sweep_axis` — return the x-axis array.
+    4. Optionally override :meth:`_post_fit` — perform fitting after liveplot.
 
-    Example:
-        class QubitSpec(BaseExperiment):
-            EXPT_NAME = "s003_qubit_spec_ge"
-            TAG = "TwoTone"
-            X_LABEL = "Frequency (MHz)"
-            TITLE_PREFIX = "Qubit ge Spectrum"
-            SWEEP_KEYS_TO_REMOVE = ["qb_freq_ge"]
-            ...
+    Examples
+    --------
+    >>> class QubitSpec(BaseExperiment):
+    ...     EXPT_NAME = "s003_qubit_spec_ge"
+    ...     TAG = "TwoTone"
+    ...     X_LABEL = "Frequency (MHz)"
+    ...     TITLE_PREFIX = "Qubit ge Spectrum"
+    ...     SWEEP_KEYS_TO_REMOVE = ["qb_freq_ge"]
     """
 
     # ── Session state — set once per notebook via BaseExperiment.setup() ──
@@ -45,9 +52,16 @@ class BaseExperiment:
     @classmethod
     def setup(cls, soc, soccfg, data_path):
         """
-        Initialise the shared QICK session.  Call once at notebook startup:
+        Initialise the shared QICK session (call once at notebook startup).
 
-            BaseExperiment.setup(soc, soccfg, r"D:\\Labber_Data\\...")
+        Parameters
+        ----------
+        soc : object
+            QICK SoC proxy object.
+        soccfg : object
+            QICK SoC configuration object.
+        data_path : str
+            Root directory for experiment data storage.
         """
         cls._soc = soc
         cls._soccfg = soccfg
@@ -55,7 +69,14 @@ class BaseExperiment:
 
     @classmethod
     def set_data_path(cls, data_path):
-        """Change the save directory at runtime without re-connecting."""
+        """
+        Change the save directory at runtime without re-connecting.
+
+        Parameters
+        ----------
+        data_path : str
+            New root directory for experiment data storage.
+        """
         cls._data_path = data_path
 
     # ── Subclass must set these metadata ──
@@ -103,16 +124,32 @@ class BaseExperiment:
 
     def run(self, py_avg, iq_process=None, show_final_plot=False, **kwargs):
         """
-        Execute the experiment with liveplot.
+        Execute the experiment with live plotting and optional post-fit.
 
-        Args:
-            py_avg:      number of software averages
-            iq_process:  "abs" or "real" — overrides the class-level IQ_PROCESS
-                         for this run only.  Use "real" after readout optimisation.
-            **kwargs:    extra args passed to subclass hooks
+        Compiles the program via :meth:`_create_program`, runs
+        :func:`~plotter.liveplot.liveplotfun` for live data display, and
+        calls :meth:`_post_fit` once acquisition completes.
 
-        Returns:
-            Fitting result (if any), or None.
+        Parameters
+        ----------
+        py_avg : int
+            Number of software averages.
+        iq_process : str, optional
+            ``"abs"`` or ``"real"`` — overrides the class-level
+            :attr:`IQ_PROCESS` for this run only.  Use ``"real"`` after
+            readout optimisation for best SNR on the I axis.
+        show_final_plot : bool, optional
+            Whether to display a final static plot after acquisition.
+            Default is ``False``.
+        **kwargs
+            Extra keyword arguments forwarded to :func:`liveplotfun`
+            (e.g. ``yoko_inst_addr``, ``yoko_mode``).
+
+        Returns
+        -------
+        fit_result : any
+            Return value of :meth:`_post_fit`, or ``None`` if no data was
+            acquired or if the subclass does not override ``_post_fit``.
         """
         if iq_process is not None:
             self.IQ_PROCESS = iq_process
@@ -154,14 +191,22 @@ class BaseExperiment:
 
     def saveLabber(self, qb_idx, yoko_value=None, config_all=None, title=None):
         """
-        Save data to HDF5 (Labber) format.
+        Save acquired data to an HDF5 file in Labber format.
 
-        Args:
-            qb_idx: qubit index/name for filename and config extraction.
-            yoko_value: optional yoko current value for filename.
-            config_all: optional ExperimentConfig instance.
-                        If provided → nested YAML via config_all.to_yaml(q_id).
-                        If None → flat YAML via config_to_yaml(self.cfg).
+        Parameters
+        ----------
+        qb_idx : int or str
+            Qubit index or name used for the filename and config extraction.
+        yoko_value : dict, optional
+            Yokogawa output value dict (``{"value": ..., "unit": ...}``) for
+            encoding the flux bias in the filename.
+        config_all : ExperimentConfig, optional
+            When provided, YAML is generated via
+            ``config_all.to_yaml(q_id=qb_idx)`` (nested, full config).
+            When ``None``, :func:`~tools.system_tool.config_to_yaml` is used
+            on the flat ``self.cfg`` dict.
+        title : str, optional
+            Optional suffix appended to the experiment name in the filename.
         """
         if title is not None:
             expt_name = f"{self.EXPT_NAME}_{qb_idx}_{title}"
@@ -208,17 +253,56 @@ class BaseExperiment:
     # ══════════════════════════════════════════════
 
     def _create_program(self):
-        """Subclass must implement: create and return the Program instance."""
+        """
+        Create and return the QICK program instance for this experiment.
+
+        Returns
+        -------
+        prog : AveragerProgramV2
+            Compiled QICK program ready for acquisition.
+
+        Raises
+        ------
+        NotImplementedError
+            Always raised if the subclass does not override this method.
+        """
         raise NotImplementedError("Subclass must implement _create_program()")
 
     def _extract_sweep_axis(self, prog):
-        """Subclass must implement: extract and return sweep axis values from prog."""
+        """
+        Extract and return the x-axis sweep values from the compiled program.
+
+        Parameters
+        ----------
+        prog : AveragerProgramV2
+            Compiled QICK program.
+
+        Returns
+        -------
+        x_vals : np.ndarray
+            Sweep axis values for the x (fast) axis.
+
+        Raises
+        ------
+        NotImplementedError
+            Always raised if the subclass does not override this method.
+        """
         raise NotImplementedError("Subclass must implement _extract_sweep_axis()")
 
     def _extract_sweep_axis_y(self, prog):
         """
-        Optional: extract and return y-axis sweep values (for 2D experiments).
-        Default: returns None (indicating 1D experiment).
+        Extract and return the y-axis sweep values for 2-D experiments.
+
+        Parameters
+        ----------
+        prog : AveragerProgramV2
+            Compiled QICK program.
+
+        Returns
+        -------
+        y_vals : np.ndarray or None
+            Sweep axis values for the y (slow) axis, or ``None`` for 1-D
+            experiments (default).
         """
         return None
 
@@ -229,13 +313,31 @@ class BaseExperiment:
     def _post_fit(self, x_vals):
         """
         Optional hook: perform fitting after liveplot and return the result.
-        Default: no fitting.
+
+        Parameters
+        ----------
+        x_vals : np.ndarray
+            Sweep axis values (same as returned by :meth:`_extract_sweep_axis`).
+
+        Returns
+        -------
+        fit_result : any
+            Fitting result (subclass-defined), or ``None`` (default).
         """
         return None
 
     def _save_comment(self, dict_val):
         """
-        Optional hook: customize the comment string for saveLabber.
-        Default: just the cfg dump.
+        Optional hook: build the comment string written to the HDF5 file.
+
+        Parameters
+        ----------
+        dict_val : str
+            YAML string of the experiment configuration.
+
+        Returns
+        -------
+        comment : str
+            Comment string to embed in the log file.
         """
         return f"{dict_val}"

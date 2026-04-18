@@ -11,7 +11,10 @@ from ..plotter.plot_utils import plot_final
 
 
 class PowerRabiEfProgram(BaseProgram):
+    """QICK program for ef Power Rabi: ge pi pulse then ef gain sweep."""
+
     def _initialize(self, cfg):
+        """Set up resonator, ge and ef generators, gain loop, and probe pulses."""
         self.setup_resonator(cfg)
         self.setup_qubit_gen(cfg, "ge")
         self.setup_qubit_gen(cfg, "ef")
@@ -20,6 +23,7 @@ class PowerRabiEfProgram(BaseProgram):
         self.setup_qb_pulse(cfg, "ef", name="qb_pulse_ef")
 
     def _body(self, cfg):
+        """Apply optional cooling, ge pi, swept ef pulse, optional ge ref, then measure."""
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
         if cfg.get("cooling", False):
             self.apply_cool(cfg)
@@ -35,6 +39,14 @@ class PowerRabiEfProgram(BaseProgram):
 
 
 class PowerRabi_ef(BaseExperiment):
+    """
+    Power Rabi (ef) experiment.
+
+    Prepares the qubit in |e> via a ge pi pulse, sweeps the ef drive gain,
+    and fits a decaying sinusoid to extract the pi and pi/2 gains for the
+    ef transition.
+    """
+
     EXPT_NAME = "s011_power_rabi_ef"
     TAG = "Rabi"
     X_LABEL = "Dac Gain (a.u)"
@@ -45,6 +57,7 @@ class PowerRabi_ef(BaseExperiment):
     X_SAVE_SCALE = 1.0
 
     def _create_program(self):
+        """Instantiate and return the PowerRabiEfProgram."""
         return PowerRabiEfProgram(
             self.soccfg,
             reps=self.cfg["reps"],
@@ -53,10 +66,26 @@ class PowerRabi_ef(BaseExperiment):
         )
 
     def _extract_sweep_axis(self, prog):
+        """Return the ef gain sweep axis in DAC units."""
         self.gains = prog.get_pulse_param("qb_pulse_ef", "gain", as_array=True)
         return self.gains
 
     def _post_fit(self, x_vals):
+        """
+        Fit a decaying sinusoid and mark pi / pi/2 gains on the plot.
+
+        Parameters
+        ----------
+        x_vals : ndarray
+            ef gain sweep axis in DAC units.
+
+        Returns
+        -------
+        pi_gain : float
+            Pi pulse gain rounded to 6 decimal places.
+        pi2_gain : float
+            Pi/2 pulse gain rounded to 6 decimal places.
+        """
         self.fit_params, error, fig, ax = plot_final(
             x_vals,
             self.iqdata,

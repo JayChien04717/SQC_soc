@@ -15,7 +15,10 @@ from .singleshot_utils import _fit_gmm, hist
 
 
 class SingleShotOptProgram(BaseProgram):
+    """QICK program for single-shot readout optimization (g/e/f states)."""
+
     def _initialize(self, cfg):
+        """Set up resonator, qubit generators, and pulse definitions."""
         self.setup_resonator(cfg)
         self.setup_qubit_gen(cfg, "ge")
         self.add_loop("shotloop", cfg["shots"])
@@ -25,6 +28,9 @@ class SingleShotOptProgram(BaseProgram):
             self.setup_qb_pulse(cfg, "ef", name="qb_ef_pulse", gain_key="pi_gain_ef")
 
     def _body(self, cfg):
+        """
+        Execute one shot: ground readout, excited readout, optional f-state readout.
+        """
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
 
         # 1. Ground state readout
@@ -86,28 +92,17 @@ class SingleShot_ge_opt:
                        readout-induced state transitions (RITS) are active.
     thermal > 0.05  -> qubit temperature is non-negligible, or relax_delay
                        is too short for the qubit to fully reset to |g>.
-
-    Key improvements over the original analyze()
-    ---------------------------------------------
-    - Physical constraint filtering: points with leakage or thermal above
-      user-specified thresholds are excluded from the optimum search.
-      This prevents selecting a high-fidelity-but-physically-unsound config.
-    - GP surrogate (Matern-2.5 + WhiteKernel): replaces RegularGridInterpolator
-      cubic spline.  More robust on sparse, noisy grids; avoids Runge
-      overshoot; automatically estimates measurement noise level.
-    - Bug fix: the original code had `max_fid_interp = min(-result.fun,
-      max_fid_grid)`, which forced the interpolated result to never exceed
-      the grid maximum, completely defeating the purpose of interpolation.
-      Removed; GP predictions can legitimately exceed grid points.
-    - Bayesian optimization (optional, online): uses Expected Improvement (EI)
-      as the acquisition function to propose the next hardware measurement
-      point.  Balances exploration vs exploitation.  Physical constraints are
-      enforced as a penalty on infeasible points.
-    - Pareto front: exposes the fidelity-vs-leakage trade-off so users can
-      choose a config based on their T1 budget.
     """
 
     def __init__(self, config):
+        """
+        Parameters
+        ----------
+        config : dict
+            Experiment configuration.  Requires
+            ``BaseExperiment.setup(soc, soccfg, data_path)`` to have been
+            called before instantiation.
+        """
         from .base_experiment import BaseExperiment
 
         if BaseExperiment._soc is None:
@@ -128,11 +123,14 @@ class SingleShot_ge_opt:
 
         Parameters
         ----------
-        SHOTS      : int   — number of single shots per state per grid point.
-        sweep_para : dict  — keys are 'length', 'gain', 'freq'; values are
-                             scalars or array-likes.  Scalar -> single point.
-        shot_f     : bool  — if True, also prepare and measure the |f> state
-                             (requires pi_ge + pi_ef pulses).
+        SHOTS : int
+            Number of single shots per state per grid point.
+        sweep_para : dict
+            Keys are ``'length'``, ``'gain'``, ``'freq'``; values are
+            scalars or array-likes.  A scalar value yields a single-point axis.
+        shot_f : bool, optional
+            If True, also prepare and measure the |f> state
+            (requires pi_ge + pi_ef pulses).
         """
         self.cfg["shots"] = SHOTS
         self.cfg["shot_f"] = shot_f
@@ -258,31 +256,42 @@ class SingleShot_ge_opt:
 
         Parameters
         ----------
-        I_g, Q_g : ndarray  — I and Q quadratures for |g> shots.
-        I_e, Q_e : ndarray  — I and Q quadratures for |e> shots.
+        I_g : ndarray
+            I quadrature for |g> shots.
+        Q_g : ndarray
+            Q quadrature for |g> shots.
+        I_e : ndarray
+            I quadrature for |e> shots.
+        Q_e : ndarray
+            Q quadrature for |e> shots.
 
         Returns
         -------
-        dict with keys:
-          fid      : GMM hard-classification fidelity (mean diag conf matrix).
-          soft_fid : Posterior-weighted soft fidelity (see note below).
-          snr      : ||delta_mu||^2 / (sigma_g^2 + sigma_e^2).
-          sep      : LDA separation ||delta_mu||.
-          leakage  : Secondary GMM weight of |e> (T1-decay / RITS proxy).
-          thermal  : Secondary GMM weight of |g> (thermal population proxy).
+        metrics : dict
+            Keys and meanings:
 
-        Soft fidelity
-        -------------
+            fid : float
+                GMM hard-classification fidelity (mean diag conf matrix).
+            soft_fid : float
+                Posterior-weighted soft fidelity.
+            snr : float
+                ``||delta_mu||^2 / (sigma_g^2 + sigma_e^2)``.
+            sep : float
+                LDA separation ``||delta_mu||``.
+            leakage : float
+                Secondary GMM weight of |e> (T1-decay / RITS proxy).
+            thermal : float
+                Secondary GMM weight of |g> (thermal population proxy).
+
+        Notes
+        -----
         Instead of hard 0/1 classification, each shot x is scored by the
-        per-state posterior P(state_i | x) under the GMM:
-            soft_fid = mean_i [ mean_{x in state_i} P(state_i | x) ]
-        This equals the expected accuracy under the model and is strictly >=
-        hard fidelity when the threshold is sub-optimal.  Particularly useful
-        for overlapping distributions.
+        per-state posterior P(state_i | x) under the GMM::
 
-        Note: QICK acquire() returns integrated IQ only, so a matched-filter
-        / optimal-weighting kernel cannot be applied here.  Soft fidelity is
-        the best post-hoc improvement achievable without time-trace data.
+            soft_fid = mean_i [ mean_{x in state_i} P(state_i | x) ]
+
+        This equals the expected accuracy under the model and is strictly >=
+        hard fidelity when the threshold is sub-optimal.
         """
         # ------------------------------------------------------------------
         # LDA projection onto the |g>-|e> axis
@@ -332,15 +341,10 @@ class SingleShot_ge_opt:
         # ------------------------------------------------------------------
         # Soft fidelity via per-shot Bayesian posterior under the GMM
         # ------------------------------------------------------------------
-        # For each state i:
-        #   P(i | x) = p_i(x) / sum_k p_k(x)   [uniform prior]
-        # soft accuracy for state i = mean_j P(i | x_j) over shots of state i.
         soft_accs = []
         for i, proj in enumerate([proj_g, proj_e]):
             X = proj.reshape(-1, 1)
-            # Log-likelihood from each state's GMM; shape = (n_states, n_shots)
             ll = np.array([gmm.score_samples(X) for gmm in state_gmms])
-            # Numerically stable softmax -> posterior
             ll_shifted = ll - ll.max(axis=0)
             posteriors = np.exp(ll_shifted)
             posteriors /= posteriors.sum(axis=0)
@@ -349,9 +353,6 @@ class SingleShot_ge_opt:
 
         # ------------------------------------------------------------------
         # Leakage: secondary GMM weight of |e> (index 1)
-        # Physical meaning: fraction of |e> shots that decayed toward |g>
-        # during readout (T1) or were excited to |f> (RITS).
-        # BIC selects 2 components only when bimodality is genuine.
         # ------------------------------------------------------------------
         gmm_e = state_gmms[1]
         leakage = 0.0
@@ -360,9 +361,6 @@ class SingleShot_ge_opt:
 
         # ------------------------------------------------------------------
         # Thermal population: secondary GMM weight of |g> (index 0)
-        # Physical meaning: fraction of nominally-ground-state shots that
-        # are actually in |e> due to finite qubit temperature.
-        # _fit_gmm enforces secondary_w < 0.30, so values are meaningful.
         # ------------------------------------------------------------------
         gmm_g = state_gmms[0]
         thermal = 0.0
@@ -389,20 +387,18 @@ class SingleShot_ge_opt:
 
         Parameters
         ----------
-        costs : ndarray, shape (N, M)
+        costs : ndarray of shape (N, M)
             Each row is a point; each column is a cost to minimize.
             To maximize a metric, pass its negation as the corresponding column.
 
         Returns
         -------
-        is_eff : bool ndarray, shape (N,)
+        is_eff : ndarray of bool, shape (N,)
             True for Pareto-efficient points.
         """
         is_eff = np.ones(len(costs), dtype=bool)
         for i, c in enumerate(costs):
             if is_eff[i]:
-                # A point dominates c if it is <= c on ALL objectives and
-                # strictly < c on at least one.
                 dominated = np.all(costs[is_eff] <= c, axis=1) & np.any(
                     costs[is_eff] < c, axis=1
                 )
@@ -423,27 +419,31 @@ class SingleShot_ge_opt:
 
         EI(x) = E[max(f(x) - y_best - xi, 0)]
                = (mu - y_best - xi) * Phi(Z) + sigma * phi(Z)
+
         where Z = (mu - y_best - xi) / sigma, Phi = normal CDF, phi = normal PDF.
 
         Parameters
         ----------
-        gp           : fitted GaussianProcessRegressor.
-        X_candidates : ndarray, shape (N, D) — candidate points (scaled).
-        y_best       : float — best observed fidelity so far.
-        xi           : float — exploration-exploitation trade-off.
-                       Larger xi (0.05) -> more exploration.
-                       Smaller xi (0.01) -> more exploitation.
+        gp : GaussianProcessRegressor
+            Fitted GP surrogate model.
+        X_candidates : ndarray of shape (N, D)
+            Candidate points in scaled feature space.
+        y_best : float
+            Best observed fidelity so far.
+        xi : float, optional
+            Exploration-exploitation trade-off parameter.
+            Larger xi (0.05) -> more exploration; smaller (0.01) -> exploitation.
 
         Returns
         -------
-        ei : ndarray, shape (N,) — EI value at each candidate point.
+        ei : ndarray of shape (N,)
+            Expected Improvement value at each candidate point.
         """
         from scipy.stats import norm as sp_norm
 
         mu, sigma = gp.predict(X_candidates, return_std=True)
         sigma = sigma.reshape(-1)
         imp = mu - y_best - xi
-        # Avoid division by near-zero sigma (flat GP region)
         Z = np.where(sigma > 1e-9, imp / sigma, 0.0)
         ei = imp * sp_norm.cdf(Z) + sigma * sp_norm.pdf(Z)
         ei[sigma < 1e-9] = 0.0
@@ -456,7 +456,24 @@ class SingleShot_ge_opt:
     def _acquire_single_point(self, length, gain, freq, SHOTS):
         """
         Run a single hardware acquisition at the given (length, gain, freq).
-        Returns (I_g, Q_g, I_e, Q_e) arrays and the full metrics dict.
+
+        Parameters
+        ----------
+        length : float or None
+            Readout length in microseconds; skipped if None.
+        gain : float or None
+            Resonator DAC gain; skipped if None.
+        freq : float or None
+            Readout frequency in MHz; skipped if None.
+        SHOTS : int
+            Number of single shots to acquire.
+
+        Returns
+        -------
+        I_g, Q_g, I_e, Q_e : ndarray
+            IQ quadratures for ground and excited states.
+        metrics : dict
+            Quality metrics from ``_compute_metrics``.
         """
         cfg_update = {"steps": SHOTS}
         if length is not None:
@@ -506,28 +523,33 @@ class SingleShot_ge_opt:
 
         Parameters
         ----------
-        leakage_threshold : float
+        leakage_threshold : float, optional
             Maximum allowed |e> leakage.  Points above this are excluded from
             the optimum search (but still shown in heatmaps).
             Rule of thumb: 0.20 is conservative; relax to 0.30 if the qubit
             T1 is short relative to the readout duration you need.
-        thermal_threshold : float
+        thermal_threshold : float, optional
             Maximum allowed thermal population.  Values above ~0.05 suggest
             the qubit is not fully resetting between shots; increase relax_delay.
-        bo_n_iter : int
+        bo_n_iter : int, optional
             Number of Bayesian optimization iterations.  Each iteration runs
             one hardware acquisition at the EI-optimal candidate point.
             Set to 0 (default) to use GP interpolation only (offline; no
             additional hardware time required).
-        bo_xi : float
+        bo_xi : float, optional
             Exploration factor for the EI acquisition function.
             0.01 -> exploitation-focused; 0.05 -> more exploratory.
-        pareto : bool
+        pareto : bool, optional
             If True, compute and print the Pareto front (fidelity vs leakage).
 
         Returns
         -------
-        (best_length, best_gain, best_freq) : rounded floats or None.
+        best_length : float or None
+            Optimized readout length (rounded to 3 decimal places).
+        best_gain : float or None
+            Optimized DAC gain (rounded to 6 decimal places).
+        best_freq : float or None
+            Optimized readout frequency (rounded to 6 decimal places).
         """
         # ------------------------------------------------------------------
         # Optional imports: GP requires scikit-learn
@@ -593,9 +615,6 @@ class SingleShot_ge_opt:
 
         # ==================================================================
         # Step 2: physical constraint filtering
-        # Exclude grid points where leakage or thermal exceeds the thresholds.
-        # Leakage reflects T1 decay during readout; thermal reflects incomplete
-        # qubit reset.  Both degrade the usable fidelity in practice.
         # ==================================================================
         feasible_mask = (leakage_array <= leakage_threshold) & (
             thermal_array <= thermal_threshold
@@ -608,13 +627,11 @@ class SingleShot_ge_opt:
         )
 
         if n_feasible == 0:
-            # Fallback: relax the constraints to find the least-bad point
             print(
                 "Warning: no feasible points found.  Relaxing to leakage <= min + 0.10."
             )
             feasible_mask = leakage_array <= (leakage_array.min() + 0.10)
 
-        # Mask infeasible points with -inf so argmax ignores them
         fid_feasible = np.where(feasible_mask, fid_Array, -np.inf)
 
         # ==================================================================
@@ -640,7 +657,6 @@ class SingleShot_ge_opt:
             f"  length={best_length_grid}  gain={best_gain_grid}  freq={best_freq_grid}"
         )
 
-        # Start with grid best; may be refined by GP or BO below
         max_length, max_gain, max_freq = (
             best_length_grid,
             best_gain_grid,
@@ -649,23 +665,8 @@ class SingleShot_ge_opt:
 
         # ==================================================================
         # Step 4: GP surrogate fit + offline interpolation
-        #
-        # Why GP instead of RegularGridInterpolator cubic?
-        # ------------------------------------------------
-        # 1. Cubic splines on sparse grids (N ~ 5-20 per axis) suffer from
-        #    Runge overshoot — wildly oscillating predictions between nodes.
-        # 2. RegularGridInterpolator requires equal spacing; our sweeps often
-        #    are not uniform.
-        # 3. GP with Matern(nu=2.5) assumes C^2 smoothness (one continuous
-        #    derivative), which matches the typical fidelity-vs-parameter
-        #    landscape for dispersive readout.
-        # 4. WhiteKernel automatically estimates shot-noise variance, making
-        #    the surrogate robust to finite-shot statistical fluctuations.
-        # 5. GP gives a posterior uncertainty (sigma), which is exploited by
-        #    the EI acquisition function in Step 5.
         # ==================================================================
         if GP_AVAILABLE:
-            # Build coordinate arrays for each axis (replace None with index)
             l_vals = np.array(
                 [
                     v if v is not None else float(i)
@@ -685,10 +686,9 @@ class SingleShot_ge_opt:
                 ]
             )
 
-            # Identify which axes are actually swept (more than one point)
-            swept_axes = []  # axis index in (L, G, F)
-            swept_vals = []  # corresponding coordinate arrays
-            fixed_vals = {}  # axis index -> fixed value for unsewpt axes
+            swept_axes = []
+            swept_vals = []
+            fixed_vals = {}
             for ax_i, (vals, length) in enumerate(
                 [(l_vals, len_L), (g_vals, len_G), (f_vals, len_F)]
             ):
@@ -701,7 +701,6 @@ class SingleShot_ge_opt:
             if len(swept_axes) == 0:
                 print("\nOnly one grid point — no interpolation needed.")
             else:
-                # Build (N_total, D) training matrix where D = # swept axes
                 idx_arrays = np.indices(shape3)
                 flat_idx = [idx_arrays[ax].ravel() for ax in range(3)]
 
@@ -710,28 +709,21 @@ class SingleShot_ge_opt:
                     if ax_i in [swept_axes[k] for k in range(len(swept_axes))]:
                         vals_for_ax = [l_vals, g_vals, f_vals][ax_i]
                         coord_cols.append(vals_for_ax[flat_idx[ax_i]])
-                X_train = np.column_stack(coord_cols)  # shape (N_total, D)
-                y_train = fid_Array.ravel()  # shape (N_total,)
+                X_train = np.column_stack(coord_cols)
+                y_train = fid_Array.ravel()
 
-                # StandardScaler normalises each parameter axis to zero mean /
-                # unit variance, making GP length-scale estimation stable when
-                # length, gain, and freq have very different physical scales.
                 scaler = StandardScaler()
                 X_scaled = scaler.fit_transform(X_train)
 
-                # Matern(nu=2.5): C^2 smooth landscape (appropriate for readout
-                # fidelity vs params).  WhiteKernel: explicit noise floor for
-                # finite-shot GMM fidelity estimates.
                 kernel = Matern(nu=2.5) + WhiteKernel(noise_level=1e-4)
                 gp = GaussianProcessRegressor(
                     kernel=kernel,
-                    n_restarts_optimizer=5,  # Multi-start to avoid local optima in hyperparameter MLE
+                    n_restarts_optimizer=5,
                     normalize_y=True,
                     random_state=42,
                 )
                 gp.fit(X_scaled, y_train)
 
-                # Evaluate the GP on a fine grid (50 pts per swept axis)
                 n_interp = 50
                 fine_swept = [
                     np.linspace(swept_vals[k].min(), swept_vals[k].max(), n_interp)
@@ -740,7 +732,6 @@ class SingleShot_ge_opt:
                 fine_grids = np.meshgrid(*fine_swept, indexing="ij")
                 X_fine_sweep = np.column_stack([g.ravel() for g in fine_grids])
 
-                # Reconstruct full (L, G, F) coordinates for the fine grid
                 full_cols = []
                 swept_col_cursor = 0
                 for ax_i in range(3):
@@ -749,21 +740,15 @@ class SingleShot_ge_opt:
                     else:
                         full_cols.append(X_fine_sweep[:, swept_col_cursor])
                         swept_col_cursor += 1
-                X_fine_full = np.column_stack(full_cols)  # shape (N_fine, 3)
+                X_fine_full = np.column_stack(full_cols)
 
                 X_fine_scaled = scaler.transform(X_fine_sweep)
                 mu_fine, sigma_fine = gp.predict(X_fine_scaled, return_std=True)
 
                 best_interp_idx = int(np.argmax(mu_fine))
                 best_interp_fid = float(mu_fine[best_interp_idx])
-                best_interp_params = X_fine_full[best_interp_idx]  # (L, G, F)
+                best_interp_params = X_fine_full[best_interp_idx]
 
-                # NOTE: We intentionally do NOT cap the GP prediction at the
-                # grid maximum.  The original code had:
-                #   max_fid_interp = min(-result.fun, max_fid_grid)
-                # which prevented interpolation from ever improving on the grid,
-                # defeating its purpose.  If the GP predicts a significantly
-                # higher value (> 5%), it is flagged for hardware verification.
                 if best_interp_fid > best_fid_grid * 1.05:
                     print(
                         f"\nNote: GP predicts fid={best_interp_fid:.4f}, which is "
@@ -780,12 +765,10 @@ class SingleShot_ge_opt:
                     f"freq={best_interp_params[2]:.6f}"
                 )
 
-                # Update the returned optimum from GP prediction
                 max_length = best_interp_params[0] if len_L > 1 else best_length_grid
                 max_gain = best_interp_params[1] if len_G > 1 else best_gain_grid
                 max_freq = best_interp_params[2] if len_F > 1 else best_freq_grid
 
-                # Store for use in BO and for external access
                 self._gp = gp
                 self._scaler = scaler
                 self._X_fine_full = X_fine_full
@@ -794,15 +777,6 @@ class SingleShot_ge_opt:
 
                 # ==============================================================
                 # Step 5: Bayesian optimization (online; requires hardware)
-                #
-                # Each BO iteration:
-                #   a) Re-fit the GP on all observed points.
-                #   b) Evaluate EI on the fine candidate grid.
-                #   c) Acquire hardware data at the EI-maximizing candidate.
-                #   d) Apply a fidelity penalty if the point is infeasible
-                #      (leakage or thermal exceeds threshold) so the GP learns
-                #      to avoid those regions.
-                #   e) Update the observed dataset and check for improvement.
                 # ==============================================================
                 if bo_n_iter > 0:
                     print(f"\n--- Bayesian optimization ({bo_n_iter} iterations) ---")
@@ -812,16 +786,14 @@ class SingleShot_ge_opt:
                     SHOTS = self.cfg["shots"]
 
                     for bo_it in range(bo_n_iter):
-                        # Re-fit GP on all observations so far
                         gp.fit(X_observed, y_observed)
                         y_best_so_far = float(y_observed.max())
 
-                        # Select next point by maximising EI
                         ei = self._expected_improvement(
                             gp, X_fine_scaled, y_best_so_far, xi=bo_xi
                         )
                         next_idx = int(np.argmax(ei))
-                        next_params = X_fine_full[next_idx]  # (L, G, F)
+                        next_params = X_fine_full[next_idx]
 
                         print(
                             f"  BO iter {bo_it + 1}/{bo_n_iter}: "
@@ -831,7 +803,6 @@ class SingleShot_ge_opt:
                             f"EI={ei[next_idx]:.5f}"
                         )
 
-                        # Hardware acquisition at the proposed point
                         _, _, _, _, metrics_new = self._acquire_single_point(
                             length=next_params[0] if len_L > 1 else None,
                             gain=next_params[1] if len_G > 1 else None,
@@ -846,20 +817,16 @@ class SingleShot_ge_opt:
                             f"thermal={metrics_new['thermal']:.3f}"
                         )
 
-                        # Penalty for physically infeasible points:
-                        # Halve the fidelity so the GP learns to avoid that region.
                         is_feasible_new = (
                             metrics_new["leakage"] <= leakage_threshold
                             and metrics_new["thermal"] <= thermal_threshold
                         )
                         y_new = fid_new if is_feasible_new else fid_new * 0.5
 
-                        # Append new observation to the training dataset
                         next_scaled = scaler.transform(next_params[swept_axes].reshape(1, -1))
                         X_observed = np.vstack([X_observed, next_scaled])
                         y_observed = np.append(y_observed, y_new)
 
-                        # Update best if this point improves on the current optimum
                         if fid_new > best_fid_grid and is_feasible_new:
                             best_fid_grid = fid_new
                             max_length = (
@@ -871,13 +838,6 @@ class SingleShot_ge_opt:
 
         # ==================================================================
         # Step 6: Pareto front (fidelity vs leakage)
-        #
-        # The Pareto front exposes the trade-off between maximising fidelity
-        # and minimising leakage (which is bounded by T1 and readout length).
-        # Users can pick a point based on their specific T1 budget:
-        #   - Short T1 qubit: prefer a Pareto point with lower leakage even
-        #     if it sacrifices a few tenths of a percent in fidelity.
-        #   - Long T1 qubit: the highest-fidelity Pareto point is likely safe.
         # ==================================================================
         if pareto:
             flat_fid = fid_Array.ravel()
@@ -887,7 +847,6 @@ class SingleShot_ge_opt:
             flat_g_idx = np.tile(np.repeat(np.arange(len_G), len_F), len_L)
             flat_f_idx = np.tile(np.arange(len_F), len_L * len_G)
 
-            # Costs: maximise fidelity -> minimise (-fid); minimise leakage
             costs = np.column_stack([-flat_fid, flat_leak])
             pareto_mask = self._is_pareto_efficient(costs)
 
@@ -947,32 +906,16 @@ class SingleShot_ge_opt:
 
         Panels
         ------
-        Row 1:  GMM Fidelity  |  Soft Fidelity  |  SNR
-        Row 2:  IQ Separation |  Leakage (|e>)  |  Thermal pop. (|g>)
+        Row 1 : GMM Fidelity  |  Soft Fidelity  |  SNR
+        Row 2 : IQ Separation |  Leakage (|e>)  |  Thermal pop. (|g>)
 
+        Notes
+        -----
         Each heatmap collapses the freq dimension by taking the best freq
         (by fidelity) at each (length, gain) pair.
 
         Infeasible grid points (leakage or thermal above threshold) are
         marked with a grey 'X' overlay to make them visually distinct.
-
-        Soft Fidelity
-        -------------
-        Posterior-weighted accuracy (see _compute_metrics).  Higher than hard
-        fidelity when the Bayes boundary is sub-optimal.  Use it to spot grid
-        points where more shots would help vs where the physics limits you.
-
-        Leakage heatmap
-        ---------------
-        Secondary GMM weight of |e>.  Large values (> 0.15) indicate T1 decay
-        during readout or readout-induced transitions (RITS).  If leakage is
-        high everywhere, the readout length is too long relative to T1.
-
-        Thermal population heatmap
-        --------------------------
-        Secondary GMM weight of |g> (only when BIC selects 2 components and
-        secondary weight < 0.30).  Reflects residual |e> population before the
-        pi-pulse, caused by finite qubit temperature or incomplete reset.
         """
         if not hasattr(self, "fid_Array"):
             print("Running analyze() first ...")
@@ -999,7 +942,6 @@ class SingleShot_ge_opt:
         leak_2d = _take(leak_arr)
         therm_2d = _take(therm_arr)
 
-        # Feasibility mask collapsed to (L, G) using the same best_f index
         if hasattr(self, "_feasible_mask"):
             feasible_2d = _take(self._feasible_mask.astype(float)) > 0.5
         else:
@@ -1045,119 +987,49 @@ class SingleShot_ge_opt:
                     lum = 0.299 * bg[0] + 0.587 * bg[1] + 0.114 * bg[2]
                     tc = "white" if lum < 0.45 else "black"
                     ax.text(
-                        j,
-                        i,
-                        format(v, fmt),
-                        ha="center",
-                        va="center",
-                        fontsize=font_sz,
-                        color=tc,
+                        j, i, format(v, fmt),
+                        ha="center", va="center",
+                        fontsize=font_sz, color=tc,
                     )
-                    # Grey 'X' overlay for infeasible points
                     if mark_infeasible and not feasible_2d[i, j]:
                         ax.text(
-                            j,
-                            i,
-                            "X",
-                            ha="center",
-                            va="center",
-                            fontsize=font_sz + 2,
-                            color="grey",
-                            alpha=0.6,
-                            fontweight="bold",
+                            j, i, "X",
+                            ha="center", va="center",
+                            fontsize=font_sz + 2, color="grey",
+                            alpha=0.6, fontweight="bold",
                         )
 
         fig, axs = plt.subplots(2, 3, figsize=(16, 10))
         fig.suptitle("SingleShot Optimization — Grid Analysis", fontsize=13)
 
-        _imshow(
-            axs[0, 0],
-            fid_2d,
-            "GMM Fidelity",
-            "RdYlGn",
-            0.5,
-            1.0,
-            ".3f",
-            "Fidelity",
-            mark_infeasible=True,
-        )
-        _imshow(
-            axs[0, 1],
-            soft_2d,
-            "Soft Fidelity",
-            "RdYlGn",
-            0.5,
-            1.0,
-            ".3f",
-            "Soft Fidelity",
-            mark_infeasible=True,
-        )
-        _imshow(
-            axs[0, 2],
-            snr_2d,
-            "SNR  (||delta_mu||^2/sigma^2)",
-            "plasma",
-            0,
-            None,
-            ".2f",
-            "SNR",
-        )
-        _imshow(
-            axs[1, 0],
-            sep_2d,
-            "IQ Separation (||delta_mu||)",
-            "Blues",
-            0,
-            None,
-            ".3f",
-            "Separation [ADC]",
-        )
-        _imshow(
-            axs[1, 1],
-            leak_2d,
-            "|e> Leakage  (T1/RITS)",
-            "Reds",
-            0,
-            0.5,
-            ".3f",
-            "Secondary weight",
-        )
-        _imshow(
-            axs[1, 2],
-            therm_2d,
-            "Thermal Pop.  (|g>)",
-            "Oranges",
-            0,
-            0.3,
-            ".3f",
-            "Secondary weight",
-        )
+        _imshow(axs[0, 0], fid_2d, "GMM Fidelity", "RdYlGn", 0.5, 1.0, ".3f",
+                "Fidelity", mark_infeasible=True)
+        _imshow(axs[0, 1], soft_2d, "Soft Fidelity", "RdYlGn", 0.5, 1.0, ".3f",
+                "Soft Fidelity", mark_infeasible=True)
+        _imshow(axs[0, 2], snr_2d, "SNR  (||delta_mu||^2/sigma^2)", "plasma",
+                0, None, ".2f", "SNR")
+        _imshow(axs[1, 0], sep_2d, "IQ Separation (||delta_mu||)", "Blues",
+                0, None, ".3f", "Separation [ADC]")
+        _imshow(axs[1, 1], leak_2d, "|e> Leakage  (T1/RITS)", "Reds",
+                0, 0.5, ".3f", "Secondary weight")
+        _imshow(axs[1, 2], therm_2d, "Thermal Pop.  (|g>)", "Oranges",
+                0, 0.3, ".3f", "Secondary weight")
 
         fig.tight_layout(rect=[0, 0, 1, 0.96])
 
-        # ------------------------------------------------------------------
-        # Console: top 5 feasible points
-        # ------------------------------------------------------------------
         def _val_str(sweep, idx):
             v = sweep[idx]
             return f"{v:.4g}" if v is not None else str(idx)
 
         all_pts = [
             (
-                l,
-                g,
-                int(best_f[l, g]),
-                fid_2d[l, g],
-                soft_2d[l, g],
-                snr_2d[l, g],
-                leak_2d[l, g],
-                therm_2d[l, g],
-                bool(feasible_2d[l, g]),
+                l, g, int(best_f[l, g]),
+                fid_2d[l, g], soft_2d[l, g], snr_2d[l, g],
+                leak_2d[l, g], therm_2d[l, g], bool(feasible_2d[l, g]),
             )
             for l in range(len_L)
             for g in range(len_G)
         ]
-        # Sort by fidelity; feasible points first
         all_pts.sort(key=lambda x: (x[8], x[3]), reverse=True)
 
         print("\n=== Top 5 points (feasible first, then by fidelity) ===")
@@ -1175,9 +1047,6 @@ class SingleShot_ge_opt:
                 f"  {leak:.3f}  {therm:.3f}  {'yes' if ok else 'NO':>4}"
             )
 
-        # ------------------------------------------------------------------
-        # Diagnostics for the best feasible point
-        # ------------------------------------------------------------------
         l, g, f, fid, soft, snr, leak, therm, _ = all_pts[0]
         print("\n=== Diagnostics for best point ===")
         if leak > 0.15:
@@ -1206,9 +1075,6 @@ class SingleShot_ge_opt:
         else:
             print(f"  [ok] Hard and soft fidelities agree (delta = {delta_fid:.4f}).")
 
-        # ------------------------------------------------------------------
-        # Full IQ hist for the best point
-        # ------------------------------------------------------------------
         l_v = _val_str(self.length_sweep, l)
         g_v = _val_str(self.gain_sweep, g)
         f_v = _val_str(self.freq_sweep, f)
@@ -1247,7 +1113,9 @@ class SingleShot_ge_opt:
         Scatter plot of all grid points in (leakage, fidelity) space with
         the Pareto front highlighted.
 
-        Requires analyze(pareto=True) to have been called first.
+        Notes
+        -----
+        Requires ``analyze(pareto=True)`` to have been called first.
         """
         if not hasattr(self, "_pareto_pts"):
             print("Run analyze(pareto=True) first.")
@@ -1258,43 +1126,27 @@ class SingleShot_ge_opt:
         leak_all = self.leakage_array.ravel()
         fid_all = self.fid_Array.ravel()
 
-        # All grid points (grey)
         ax.scatter(leak_all, fid_all, c="grey", s=20, alpha=0.4, label="Grid points")
 
-        # Pareto front points (coloured)
         pareto_fid = [p[0] for p in self._pareto_pts]
         pareto_leak = [p[1] for p in self._pareto_pts]
         ax.scatter(
-            pareto_leak,
-            pareto_fid,
-            c="tab:blue",
-            s=60,
-            zorder=3,
-            label="Pareto front",
+            pareto_leak, pareto_fid,
+            c="tab:blue", s=60, zorder=3, label="Pareto front",
         )
-        # Connect Pareto points with a step line (sorted by leakage)
         sorted_pairs = sorted(zip(pareto_leak, pareto_fid))
         ax.step(
             [p[0] for p in sorted_pairs],
             [p[1] for p in sorted_pairs],
-            where="post",
-            color="tab:blue",
-            linewidth=1.2,
-            alpha=0.6,
+            where="post", color="tab:blue", linewidth=1.2, alpha=0.6,
         )
 
-        # Mark the overall best feasible point
         if hasattr(self, "_feasible_mask"):
             fid_feasible = np.where(self._feasible_mask, self.fid_Array, -np.inf)
             best_idx = np.unravel_index(np.argmax(fid_feasible), fid_feasible.shape)
             ax.scatter(
-                self.leakage_array[best_idx],
-                self.fid_Array[best_idx],
-                c="red",
-                s=100,
-                zorder=4,
-                marker="*",
-                label="Best feasible",
+                self.leakage_array[best_idx], self.fid_Array[best_idx],
+                c="red", s=100, zorder=4, marker="*", label="Best feasible",
             )
 
         ax.set_xlabel("Leakage (secondary |e> weight)", fontsize=11)
@@ -1315,11 +1167,11 @@ class SingleShot_ge_opt:
 
         Parameters
         ----------
-        top_n          : int  — number of top points to plot.
-        feasible_only  : bool — if True (default), restrict the ranking to
-                                points that passed the physical constraints.
-                                Set to False to see all points including those
-                                with high leakage / thermal.
+        top_n : int, optional
+            Number of top points to plot.
+        feasible_only : bool, optional
+            If True (default), restrict the ranking to points that passed the
+            physical constraints.  Set to False to include all points.
         """
         if not hasattr(self, "fid_Array"):
             print("Running analyze() to generate fidelity data...")
@@ -1333,7 +1185,6 @@ class SingleShot_ge_opt:
             print("Error: fid_Array must be 3-D (length, gain, freq).")
             return
 
-        # Filter to feasible points if requested
         if feasible_only and hasattr(self, "_feasible_mask"):
             scored = np.where(self._feasible_mask, fid_Array, -np.inf)
         else:
@@ -1341,7 +1192,6 @@ class SingleShot_ge_opt:
 
         flat_scored = scored.flatten()
         top_n_flat_indices = np.argsort(flat_scored)[-top_n:][::-1]
-        # Drop any -inf (infeasible) entries that sneak in
         top_n_flat_indices = [
             idx for idx in top_n_flat_indices if flat_scored[idx] > -np.inf
         ][:top_n]
@@ -1366,8 +1216,7 @@ class SingleShot_ge_opt:
         hexbin_gridsize = 50
         grid_size = int(np.ceil(np.sqrt(len(top_n_flat_indices))))
         fig, axes = plt.subplots(
-            grid_size,
-            grid_size,
+            grid_size, grid_size,
             figsize=(5 * grid_size, 5 * grid_size),
         )
         axes = axes.flatten()
@@ -1393,28 +1242,17 @@ class SingleShot_ge_opt:
 
             ax = axes[i]
             ax.hexbin(
-                I_e,
-                Q_e,
-                gridsize=hexbin_gridsize,
-                cmap="Reds",
-                alpha=0.6,
-                extent=plot_extent,
-                mincnt=1,
+                I_e, Q_e, gridsize=hexbin_gridsize, cmap="Reds",
+                alpha=0.6, extent=plot_extent, mincnt=1,
             )
             ax.hexbin(
-                I_g,
-                Q_g,
-                gridsize=hexbin_gridsize,
-                cmap="Blues",
-                alpha=0.6,
-                extent=plot_extent,
-                mincnt=1,
+                I_g, Q_g, gridsize=hexbin_gridsize, cmap="Blues",
+                alpha=0.6, extent=plot_extent, mincnt=1,
             )
             ax.set_xlim(plot_min, plot_max)
             ax.set_ylim(plot_min, plot_max)
             ax.set_aspect("equal", adjustable="box")
 
-            # Indicate infeasible points with a red border
             if hasattr(self, "_feasible_mask"):
                 ok = bool(self._feasible_mask[l_idx, g_idx, f_idx])
                 if not ok:

@@ -7,13 +7,44 @@ from ..tools import fitting as fitter
 
 def plot_final(xpts, data: np.ndarray, x_label: str, fitfunc, simfunc, return_ax=False):
     """
-    Plot all four IQ quadratures (abs, phase, I, Q), fit each,
-    and display the best-fit channel on a large right-hand panel.
+    Plot all four IQ quadratures, fit each, and highlight the best-fit channel.
+
+    Fits *abs*, *phase*, *I*, and *Q* traces individually using *fitfunc*,
+    selects the best-fitting channel via :func:`~tools.fitting.get_best_fit`,
+    and renders a 2×3 figure layout: four small subplots on the left two
+    columns and one large panel on the right showing the best channel.
+
+    Parameters
+    ----------
+    xpts : np.ndarray
+        Independent variable array (e.g. pulse length or frequency sweep).
+    data : np.ndarray
+        Complex-valued IQ data array (same length as *xpts*).
+    x_label : str
+        Label for the x-axis of all subplots.
+    fitfunc : callable
+        Fit routine with signature ``fitfunc(x, y) → (popt, pcov, info)``.
+        Called once per quadrature.
+    simfunc : callable
+        Forward model function with signature ``simfunc(x, *params) → y``.
+        Used to evaluate the fitted curve.
+    return_ax : bool, optional
+        When ``True``, also returns the ``Axes`` object for the large
+        best-fit panel.  Default is ``False``.
 
     Returns
     -------
-    fit_params, error, fig            (return_ax=False)
-    fit_params, error, fig, ax_big   (return_ax=True)
+    fit_params : np.ndarray
+        Best-fit parameter array for the channel selected by
+        :func:`~tools.fitting.get_best_fit`.
+    error : np.ndarray
+        Standard errors (square root of the diagonal of *pcov*) for
+        *fit_params*.
+    fig : matplotlib.figure.Figure
+        The rendered figure.
+    ax_big : matplotlib.axes.Axes
+        Large right-hand panel axes object.  Only returned when
+        *return_ax* is ``True``.
     """
     marker_style = {"marker": "o", "markersize": 5, "alpha": 0.7, "linestyle": "-"}
 

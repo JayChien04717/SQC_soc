@@ -11,13 +11,17 @@ from ..plotter.plot_utils import plot_final
 
 
 class QubitSpecProgram(BaseProgram):
+    """QICK program for two-tone qubit spectroscopy: sweeps qubit drive frequency."""
+
     def _initialize(self, cfg):
+        """Set up resonator, qubit generator, and flat-top probe pulse."""
         self.setup_resonator(cfg)
         self.setup_qubit_gen(cfg, "ge")
         self.add_loop("freqloop", cfg["steps"])
         self.setup_qb_pulse(cfg, "ge", name="qb_pulse", pulse_type="flat_top")
 
     def _body(self, cfg):
+        """Apply optional cooling, send qubit probe pulse, then measure."""
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
         if cfg.get("cooling", False):
             self.apply_cool(cfg)
@@ -28,6 +32,13 @@ class QubitSpecProgram(BaseProgram):
 
 
 class QubitSpec(BaseExperiment):
+    """
+    Qubit spectroscopy (ge) experiment.
+
+    Sweeps the qubit drive frequency and fits a Lorentzian to the dispersive
+    readout response to extract the ge transition frequency.
+    """
+
     EXPT_NAME = "s003_qubit_spec_ge"
     TAG = "TwoTone"
     X_LABEL = "Frequency (MHz)"
@@ -38,6 +49,7 @@ class QubitSpec(BaseExperiment):
     X_SAVE_SCALE = 1e6
 
     def _create_program(self):
+        """Instantiate and return the QubitSpecProgram."""
         return QubitSpecProgram(
             self.soccfg,
             reps=self.cfg["reps"],
@@ -46,9 +58,23 @@ class QubitSpec(BaseExperiment):
         )
 
     def _extract_sweep_axis(self, prog):
+        """Return the qubit frequency sweep axis in MHz."""
         return prog.get_pulse_param("qb_pulse", "freq", as_array=True)
 
     def _post_fit(self, x_vals):
+        """
+        Fit a Lorentzian to the spectrum and return the peak frequency.
+
+        Parameters
+        ----------
+        x_vals : ndarray
+            Frequency axis in MHz.
+
+        Returns
+        -------
+        float
+            Fitted qubit ge frequency in MHz (rounded to 6 decimal places).
+        """
         fit_params, error, fig = plot_final(
             x_vals, self.iqdata, "Frequency(MHz)", fitlor, lorfunc
         )
@@ -58,4 +84,5 @@ class QubitSpec(BaseExperiment):
         return round(fit_params[2], 6)
 
     def _save_comment(self, dict_val):
+        """Return a comment string including the fitted ge frequency."""
         return f"f_q_ge = {self.fit_params[2]:.4f} MHz, \n{dict_val}"

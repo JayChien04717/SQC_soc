@@ -11,7 +11,10 @@ from ..plotter.plot_utils import plot_final
 
 
 class RamseyEfProgram(BaseProgram):
+    """QICK program for ef Ramsey: ge pi pulse then ef two-pi/2 pulse sequence."""
+
     def _initialize(self, cfg):
+        """Set up resonator, ge and ef generators, wait loop, and pi/ef pulses."""
         self.setup_resonator(cfg)
         self.setup_qubit_gen(cfg, "ge")
         self.setup_qubit_gen(cfg, "ef")
@@ -27,6 +30,7 @@ class RamseyEfProgram(BaseProgram):
         )
 
     def _body(self, cfg):
+        """Apply optional cooling, ge pi, ef Ramsey sequence, optional ge ref, then measure."""
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
         if cfg.get("cooling", False):
             self.apply_cool(cfg)
@@ -46,6 +50,14 @@ class RamseyEfProgram(BaseProgram):
 
 
 class Ramsey_ef(BaseExperiment):
+    """
+    Ramsey (ef) experiment.
+
+    Sweeps the inter-pulse delay on the ef transition and fits either a
+    decaying sinusoid (when ``ramsey_freq != 0``) or a pure exponential
+    decay (when ``ramsey_freq == 0``) to extract T2* and the detuning.
+    """
+
     EXPT_NAME = "s012_Ramsey_ef"
     TAG = "Ramsey"
     X_LABEL = "Ramsey Times (us)"
@@ -56,6 +68,7 @@ class Ramsey_ef(BaseExperiment):
     X_SAVE_SCALE = 1.0
 
     def _create_program(self):
+        """Instantiate and return the RamseyEfProgram."""
         return RamseyEfProgram(
             self.soccfg,
             reps=self.cfg["reps"],
@@ -64,10 +77,24 @@ class Ramsey_ef(BaseExperiment):
         )
 
     def _extract_sweep_axis(self, prog):
+        """Return the wait-time sweep axis in microseconds."""
         self.delay_times = prog.get_time_param("wait", "t", as_array=True)
         return self.delay_times
 
     def _post_fit(self, x_vals):
+        """
+        Fit and plot the ef Ramsey fringe or T2* exponential decay.
+
+        Parameters
+        ----------
+        x_vals : ndarray
+            Wait-time sweep axis in microseconds.
+
+        Returns
+        -------
+        fit_params : array
+            Best-fit parameters from the chosen model.
+        """
         if self.cfg["ramsey_freq"] != 0:
             self.fit_params, error, fig = plot_final(
                 x_vals, self.iqdata, "Ramsey Times", fitdecaysin, decaysin
@@ -87,7 +114,18 @@ class Ramsey_ef(BaseExperiment):
         return self.fit_params
 
     def correct_detune(self):
-        """Correct qubit ef frequency based on fitted detuning."""
+        """
+        Correct the qubit ef frequency based on the fitted detuning.
+
+        Updates ``cfg["qb_freq_ef"]`` in-place when the fitted detuning exceeds
+        5 kHz.  Does nothing if the detuning is already within tolerance.
+
+        Returns
+        -------
+        qb_freq_ef : float
+            Updated (or unchanged) qubit ef frequency in MHz, rounded to 5
+            decimal places.
+        """
         if abs(self.fit_params[1] - self.cfg["ramsey_freq"]) > 0.005:
             self.cfg["qb_freq_ef"] -= round(
                 self.fit_params[1] - self.cfg["ramsey_freq"], 2
@@ -101,4 +139,5 @@ class Ramsey_ef(BaseExperiment):
             return self.cfg["qb_freq_ef"]
 
     def _save_comment(self, dict_val):
+        """Return a comment string including T2 Ramsey."""
         return f"T2 Ramsey = {self.fit_params[3]:.2f} us\n{dict_val}"

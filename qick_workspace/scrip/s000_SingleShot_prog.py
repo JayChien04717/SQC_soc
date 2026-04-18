@@ -15,7 +15,10 @@ from .singleshot_utils import plot_hist, general_hist, hist
 # ── Program ──
 
 class SingleShotProgram_gef(BaseProgram):
+    """QICK program for g/e/f single-shot readout with multi-trigger body."""
+
     def _initialize(self, cfg):
+        """Set up resonator, ge/ef generators, and pi-pulse definitions."""
         self.setup_resonator(cfg)
         self.setup_qubit_gen(cfg, 'ge')
         self.setup_qubit_gen(cfg, 'ef')
@@ -24,6 +27,7 @@ class SingleShotProgram_gef(BaseProgram):
         self.setup_qb_pulse(cfg, 'ef', name="qb_ef_pulse", gain_key="pi_gain_ef")
 
     def _body(self, cfg):
+        """Execute one shot cycle: ground, excited, and optional f-state readout."""
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
         # Ground state readout
         self.pulse(ch=cfg["res_ch"], name="res_pulse", t=0)
@@ -51,6 +55,14 @@ class SingleShot_gef:
     """Single-shot readout for g/e/f state discrimination."""
 
     def __init__(self, config):
+        """
+        Parameters
+        ----------
+        config : dict
+            Experiment configuration.  Requires
+            ``BaseExperiment.setup(soc, soccfg, data_path)`` to have been
+            called before instantiation.
+        """
         from .base_experiment import BaseExperiment
         if BaseExperiment._soc is None:
             raise RuntimeError("Call BaseExperiment.setup(soc, soccfg, data_path) first.")
@@ -59,6 +71,22 @@ class SingleShot_gef:
         self.cfg = config
 
     def run(self, SHOTS, shot_f=False):
+        """
+        Acquire single-shot IQ data for ground, excited, and optionally f state.
+
+        Parameters
+        ----------
+        SHOTS : int
+            Number of single shots per state.
+        shot_f : bool, optional
+            If True, also acquire f-state shots (requires ef pi-pulse).
+
+        Returns
+        -------
+        data : dict
+            Keys ``'Ig'``, ``'Qg'``, ``'Ie'``, ``'Qe'``, and optionally
+            ``'If'``, ``'Qf'``.
+        """
         self.cfg["shots"] = SHOTS
         self.cfg["shot_f"] = shot_f
 
@@ -81,11 +109,36 @@ class SingleShot_gef:
         return self.data
 
     def plot(self, fid_avg=False, verbose=True):
+        """
+        Plot the IQ histogram and return fidelity metrics.
+
+        Parameters
+        ----------
+        fid_avg : bool, optional
+            API-compatibility flag passed to ``hist()``.
+        verbose : bool, optional
+            Print numerical results.
+
+        Returns
+        -------
+        list
+            ``[fids, thresholds, angle_deg, conf_matrix_pct]``.
+        """
         return hist(
             self.data, plot=True, verbose=verbose, fid_avg=fid_avg,
         )
 
     def saveLabber(self, qb_idx, yoko_value=None):
+        """
+        Save IQ shot data to an HDF5/Labber file.
+
+        Parameters
+        ----------
+        qb_idx : int
+            Qubit index appended to the filename.
+        yoko_value : float or None, optional
+            Yokogawa current value appended to the filename.
+        """
         has_f = "If" in self.data
         expt_name = ("s000_singleshot_gef" if has_f else "s000_singleshot_ge") + f"_{qb_idx}"
         from .base_experiment import BaseExperiment

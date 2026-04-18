@@ -44,12 +44,16 @@ ALLXY_SEQUENCE = [
 
 
 class AllXYProgram(BaseProgram):
+    """QICK program for a single AllXY gate-pair measurement."""
+
     def _initialize(self, cfg):
+        """Set up resonator, qubit generator, and standard ge gates."""
         self.setup_resonator(cfg)
         self.setup_qubit_gen(cfg, "ge")
         self.setup_standard_gates(cfg, prefix="ge")
 
     def _body(self, cfg):
+        """Apply optional cooling, the configured gate pair, then measure."""
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
         if cfg.get("cooling", False):
             self.apply_cool(cfg)
@@ -76,6 +80,17 @@ class AllXY:
     """AllXY gate error diagnostic (21 gate-pair sequences)."""
 
     def __init__(self, config):
+        """
+        Parameters
+        ----------
+        config : dict
+            Experiment configuration dictionary.
+
+        Raises
+        ------
+        RuntimeError
+            If ``BaseExperiment.setup()`` has not been called first.
+        """
         from .base_experiment import BaseExperiment
         if BaseExperiment._soc is None:
             raise RuntimeError("Call BaseExperiment.setup(soc, soccfg, data_path) first.")
@@ -85,11 +100,15 @@ class AllXY:
 
     def run(self, py_avg, iq_process="abs"):
         """
+        Acquire all 21 AllXY gate-pair sequences.
+
         Parameters
         ----------
-        iq_process : "abs" | "real"
-            How to convert complex IQ → scalar for display/analysis.
-            Use "real" after readout optimization.
+        py_avg : int
+            Hardware averages (rounds) per gate pair.
+        iq_process : str, optional
+            How to convert complex IQ to scalar: ``"abs"`` or ``"real"``.
+            Use ``"real"`` after readout optimization.
         """
         self._iq_process = iq_process
         allxy_lst = []
@@ -106,6 +125,14 @@ class AllXY:
         self.allxy_lst = np.array(allxy_lst)
 
     def plot(self):
+        """
+        Plot the AllXY sequence results against the ideal reference line.
+
+        Raises
+        ------
+        AttributeError
+            If ``run()`` has not been called first.
+        """
         _proc = np.real if getattr(self, "_iq_process", "abs") == "real" else np.abs
         amp = _proc(self.allxy_lst)
         if amp[0] < amp[-1]:
@@ -138,6 +165,16 @@ class AllXY:
         plt.show()
 
     def saveLabber(self, qb_idx, yoko_value=None):
+        """
+        Save AllXY sequence data to an HDF5/Labber file.
+
+        Parameters
+        ----------
+        qb_idx : int
+            Qubit index appended to the experiment name.
+        yoko_value : float or None, optional
+            Yokogawa flux bias value embedded in the filename.
+        """
         expt_name = f"s014_AllXY_ge_{qb_idx}"
         from .base_experiment import BaseExperiment
         save_dir = BaseExperiment._data_path or DATA_PATH

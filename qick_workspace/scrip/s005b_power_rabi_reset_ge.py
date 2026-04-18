@@ -32,7 +32,10 @@ from ..plotter.plot_utils import plot_final
 
 
 class PowerRabiResetProgram(BaseProgram):
+    """QICK program for Power Rabi with active reset after each shot."""
+
     def _initialize(self, cfg):
+        """Set up resonator, qubit generator, swept probe pulse, and fixed pi reset pulse."""
         self.setup_resonator(cfg)
         self.setup_qubit_gen(cfg, "ge")
 
@@ -46,6 +49,7 @@ class PowerRabiResetProgram(BaseProgram):
         )
 
     def _body(self, cfg):
+        """Apply probe pulse, measure, then conditionally apply reset π pulse."""
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
 
         # ── Probe pulse (Power Rabi sweep) ───────────────────────────────
@@ -86,7 +90,6 @@ class PowerRabiResetProgram(BaseProgram):
         # Prevents timeline drift when the two branches have different lengths.
         self.delay_auto(t=0.05)
 
-
         # ── Second readout (trigger 2 = post-reset verification) ─────────
         # Mirrors v1's second measure(..., wait=True, syncdelay=relax_delay).
         # iq_list[0][1] can be used offline to check reset efficiency.
@@ -97,15 +100,30 @@ class PowerRabiResetProgram(BaseProgram):
 
 
 class PowerRabiReset:
-    """Power Rabi ge with active reset after each shot.
+    """
+    Power Rabi ge with active reset after each shot.
 
     Two triggers per body:
-      iq_list[0][0]  — trigger 1: actual Rabi measurement data
-      iq_list[0][1]  — trigger 2: post-reset verification (reset efficiency)
 
-    Usage::
+    * ``iq_list[0][0]`` — trigger 1: actual Rabi measurement data
+    * ``iq_list[0][1]`` — trigger 2: post-reset verification (reset efficiency)
 
-        cfg["threshold"] = <single-sample I threshold>  # from s010 single-shot
+    Parameters
+    ----------
+    config : dict
+        Experiment configuration dictionary.  Must contain ``threshold`` and
+        ``pi_gain_ge`` in addition to the standard Power Rabi keys.
+
+    Raises
+    ------
+    RuntimeError
+        If ``BaseExperiment.setup()`` has not been called before instantiation.
+
+    Examples
+    --------
+    ::
+
+        cfg["threshold"] = <single-sample I threshold>  # from single-shot calibration
         expt = PowerRabiReset(cfg)
         expt.run(py_avg=100)
         expt.plot()
@@ -129,13 +147,24 @@ class PowerRabiReset:
         self._iq_process = "abs"
 
     def run(self, py_avg=1, iq_process="abs", progress=True):
-        """Acquire Power Rabi data with active reset.
+        """
+        Acquire Power Rabi data with active reset.
 
         Parameters
         ----------
-        py_avg     : int   — software averages (rounds)
-        iq_process : str   — "abs" or "real" (use "real" after readout optimisation)
-        progress   : bool  — show tqdm progress bar
+        py_avg : int, optional
+            Software averages (rounds).
+        iq_process : str, optional
+            IQ processing mode: ``"abs"`` or ``"real"``.  Use ``"real"``
+            after readout optimisation.
+        progress : bool, optional
+            Whether to show a tqdm progress bar.
+
+        Returns
+        -------
+        iqdata : ndarray of complex
+            Complex IQ data from trigger 1 (actual Rabi measurement),
+            shape ``(n_gains,)``.
         """
         self._iq_process = iq_process
 
@@ -155,7 +184,21 @@ class PowerRabiReset:
         return self.iqdata
 
     def plot(self):
-        """Plot Power Rabi with decaying-sinusoid fit and mark π / π/2 gains."""
+        """
+        Plot Power Rabi with decaying-sinusoid fit and mark pi / pi/2 gains.
+
+        Returns
+        -------
+        pi_gain : float
+            Pi pulse gain (rounded to 6 decimal places).
+        pi2_gain : float
+            Pi/2 pulse gain (rounded to 6 decimal places).
+
+        Raises
+        ------
+        RuntimeError
+            If ``run()`` has not been called first.
+        """
         if self.iqdata is None:
             raise RuntimeError("Must call run() before plot().")
 
@@ -174,7 +217,24 @@ class PowerRabiReset:
         return round(pi_gain, 6), round(pi2_gain, 6)
 
     def saveLabber(self, qb_idx, config_all=None, yoko_value=None):
-        """Save Rabi data (trigger 1) to HDF5/Labber file."""
+        """
+        Save Rabi data (trigger 1) to an HDF5/Labber file.
+
+        Parameters
+        ----------
+        qb_idx : int
+            Qubit index; appended to the experiment name.
+        config_all : object or None, optional
+            Full config object with a ``to_yaml(q_id)`` method.  If ``None``,
+            the current ``cfg`` dict is serialised with ``config_to_yaml``.
+        yoko_value : float or None, optional
+            Yokogawa flux bias value; embedded in the filename when provided.
+
+        Raises
+        ------
+        RuntimeError
+            If ``run()`` has not been called first.
+        """
         if self.iqdata is None:
             raise RuntimeError("Must call run() before saveLabber().")
 

@@ -27,12 +27,50 @@ def get_r2(
     fitfunc: Callable,
     fit_params: List[float],
 ) -> float:
+    """
+    Compute the coefficient of determination (R²) for a fit.
+
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Independent variable data points.
+    ydata : np.ndarray
+        Dependent variable data points.
+    fitfunc : Callable
+        Model function with signature f(x, *params).
+    fit_params : list of float
+        Fitted model parameters.
+
+    Returns
+    -------
+    r2 : float
+        R² value; 1.0 is a perfect fit, negative values indicate a worse-than-mean
+        fit. Returns -inf when ss_tot is zero.
+    """
     ss_res = np.sum((fitfunc(xdata, *fit_params) - ydata) ** 2)
     ss_tot = np.sum((ydata - np.mean(ydata)) ** 2)
     return 1 - ss_res / ss_tot if ss_tot > 0 else -np.inf
 
 
 def fix_phase(p: List[float]) -> Tuple[float, float]:
+    """
+    Normalize phase and calculate pi and pi/2 gains from sinusoidal fit parameters.
+
+    Wraps p[2] into [-180, 180] degrees and then computes the gain values
+    corresponding to a pi rotation and a pi/2 rotation.
+
+    Parameters
+    ----------
+    p : list of float
+        Fit parameters ``[yscale, freq, phase_deg, y0]`` from a sinusoidal fit.
+
+    Returns
+    -------
+    pi_gain : float
+        Gain value for a pi rotation.
+    pi2_gain : float
+        Gain value for a pi/2 rotation.
+    """
     if p[2] > 180:
         p[2] -= 360
     elif p[2] < -180:
@@ -52,6 +90,29 @@ def fourier_init(
     ydata: np.ndarray,
     debug: bool = False,
 ) -> Tuple[float, float]:
+    """
+    Estimate oscillation frequency and phase using a real-valued FFT.
+
+    Subtracts the mean from ydata before computing the FFT, skips the DC bin,
+    and returns the frequency and phase of the dominant spectral component.
+
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Uniformly spaced x-axis values (used to compute the sample spacing).
+    ydata : np.ndarray
+        Signal values corresponding to xdata.
+    debug : bool, optional
+        If True, displays a two-panel plot of FFT magnitude and phase.
+        Default is False.
+
+    Returns
+    -------
+    max_freq : float
+        Frequency of the dominant spectral component.
+    max_phase : float
+        Phase (radians) of the dominant spectral component.
+    """
     ydata = ydata - np.mean(ydata)
     fourier = np.fft.rfft(ydata)  # rfft: no redundant negative freqs
     fft_freqs = np.fft.rfftfreq(len(ydata), d=xdata[1] - xdata[0])
@@ -86,6 +147,24 @@ def validate_bounds(
     fitparams: List[float],
     bounds: Tuple[List[float], List[float]],
 ) -> List[float]:
+    """
+    Validate that initial fit parameters lie within specified bounds.
+
+    Any parameter outside its bounds is reset to the midpoint of the
+    corresponding interval, and a warning is printed.
+
+    Parameters
+    ----------
+    fitparams : list of float
+        Initial parameter estimates to validate.
+    bounds : tuple of (list of float, list of float)
+        ``(lower_bounds, upper_bounds)`` with one entry per parameter.
+
+    Returns
+    -------
+    fitparams : list of float
+        Validated parameter list with out-of-bounds values replaced.
+    """
     fitparams = list(fitparams)
     for i, (param, lo, hi) in enumerate(zip(fitparams, bounds[0], bounds[1])):
         if not (lo < param < hi):
@@ -105,6 +184,36 @@ def generic_fit(
     bounds: Optional[Tuple[List[float], List[float]]] = None,
     error_message: str = "Warning: fit failed!",
 ) -> Tuple[List[float], np.ndarray, List[float]]:
+    """
+    Generic curve-fitting wrapper using scipy Trust Region Reflective.
+
+    Validates initial parameters against bounds (if provided), then calls
+    ``scipy.optimize.curve_fit`` with the TRF method.
+
+    Parameters
+    ----------
+    fitfunc : Callable
+        Model function with signature f(x, *params).
+    xdata : np.ndarray
+        Independent variable data.
+    ydata : np.ndarray
+        Dependent variable data.
+    fitparams : list of float
+        Initial parameter guesses.
+    bounds : tuple of (list of float, list of float), optional
+        ``(lower_bounds, upper_bounds)`` passed to curve_fit.
+    error_message : str, optional
+        Message to print when the fit fails.
+
+    Returns
+    -------
+    pOpt : list of float
+        Optimized parameters, or NaN-filled list on failure.
+    pCov : np.ndarray
+        Covariance matrix of the fit, or inf-filled matrix on failure.
+    fitparams : list of float
+        Validated initial parameters used for the fit attempt.
+    """
     if bounds:
         fitparams = validate_bounds(fitparams, bounds)
 
@@ -142,7 +251,23 @@ def _fit_snr(
     denominator (ss_tot) when the signal swing is tiny relative to the
     offset, making it hypersensitive to noise.
 
-    Returns -inf if the fit is invalid (NaN params or infinite covariance).
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Independent variable data.
+    ydata : np.ndarray
+        Measured data.
+    fit : list of float
+        Fitted model parameters.
+    fit_err : np.ndarray
+        Covariance matrix from the fit.
+    fitfunc : Callable
+        Model function with signature f(x, *params).
+
+    Returns
+    -------
+    snr : float
+        Signal-to-noise ratio of the fit; -inf for invalid fits.
     """
     if np.any(np.isnan(fit)) or np.any(np.diag(fit_err) == np.inf):
         return -np.inf
@@ -165,7 +290,20 @@ def _calculate_normalized_errors(
 ) -> np.ndarray:
     """
     Fallback scorer: mean(σ_i / |p_i|) across parameters.
-    Lower = better.  Returns inf for invalid fits.
+
+    Lower values indicate better fits. Returns inf for invalid fits.
+
+    Parameters
+    ----------
+    fits : list
+        List of fitted parameter arrays, one per channel.
+    fit_errors : list of np.ndarray
+        List of covariance matrices, one per channel.
+
+    Returns
+    -------
+    norm_errors : np.ndarray
+        Normalized error score for each fit; inf for degenerate cases.
     """
     norm_errors = []
     for fit, err_matrix in zip(fits, fit_errors):
@@ -191,6 +329,24 @@ def _find_best_fit_with_snr(
     SNR = (fit peak-to-peak) / (residual RMS) is insensitive to DC offset,
     directly reflecting how well the oscillation stands above the noise.
     Falls back to normalised-error ranking if every fit is invalid.
+
+    Parameters
+    ----------
+    data : dict
+        Experiment data dict containing ``'xpts'`` and each measure array.
+    fits : list
+        Fitted parameter arrays, indexed by check_measures order.
+    fit_errors : list of np.ndarray
+        Covariance matrices, indexed by check_measures order.
+    check_measures : tuple of str
+        Channel names to compare (e.g. ``("amps", "avgi", "avgq")``).
+    fitfunc : Callable
+        Model function f(x, *params) for computing the fit curve.
+
+    Returns
+    -------
+    best_idx : int
+        Index into check_measures of the best channel.
     """
     xdata = data["xpts"]
     scores = [
@@ -216,6 +372,21 @@ def _find_best_fit_simple(
     fits: List[Any],
     fit_errors: List[np.ndarray],
 ) -> int:
+    """
+    Select the best fit by minimum normalised covariance error.
+
+    Parameters
+    ----------
+    fits : list
+        Fitted parameter arrays, one per channel.
+    fit_errors : list of np.ndarray
+        Covariance matrices, one per channel.
+
+    Returns
+    -------
+    best_idx : int
+        Index of the fit with the lowest normalised error.
+    """
     return int(np.argmin(_calculate_normalized_errors(fits, fit_errors)))
 
 
@@ -232,24 +403,31 @@ def get_best_fit(
 
     Selection priority
     ------------------
-    1. `override`  — use this channel unconditionally if given.
-    2. `fitfunc`   — SNR-based selection (fit amplitude / residual RMS).
+    1. ``override``  — use this channel unconditionally if given.
+    2. ``fitfunc``   — SNR-based selection (fit amplitude / residual RMS).
     3. fallback    — lowest normalised covariance error.
 
     Parameters
     ----------
-    data                 : experiment data dict; must contain keys like
-                           "{prefix}_{measure}", "{prefix}_err_{measure}",
-                           "xpts", and each measure name.
-    fitfunc              : fitted model f(x, *params); required for SNR scoring.
-    prefixes             : key prefixes in `data` (default ["fit"]).
-    check_measures       : channels to compare (default ("amps","avgi","avgq")).
-    get_best_data_params : extra keys to return for the winning channel.
-    override             : if set, skip scoring and use this channel directly.
+    data : dict
+        Experiment data dict; must contain keys like
+        ``"{prefix}_{measure}"``, ``"{prefix}_err_{measure}"``,
+        ``"xpts"``, and each measure name.
+    fitfunc : Callable, optional
+        Fitted model f(x, *params); required for SNR scoring.
+    prefixes : list of str, optional
+        Key prefixes in ``data`` (default ``["fit"]``).
+    check_measures : tuple of str, optional
+        Channels to compare (default ``("amps", "avgi", "avgq")``).
+    get_best_data_params : tuple of str, optional
+        Extra keys to return for the winning channel.
+    override : str, optional
+        If set, skip scoring and use this channel directly.
 
     Returns
     -------
-    [best_fit, best_fit_err, *extra_params, best_measure_name]
+    result : list
+        ``[best_fit, best_fit_err, *extra_params, best_measure_name]``
     """
     # ── collect fits and covariance matrices ──────────────────────
     fits, fit_errors = [], []
@@ -290,15 +468,24 @@ def get_best_fit(
 # ====================================================== #
 
 
-def fix_phase(p: List[float]) -> float:
+def fix_phase(p: List[float]) -> Tuple[float, float]:
     """
-    Normalize phase and calculate pi gain.
+    Normalize phase and calculate pi and pi/2 gains from sinusoidal fit parameters.
 
-    Args:
-        p: Parameters list containing phase information
+    Wraps p[2] into [-180, 180] degrees and computes the gain values
+    corresponding to a pi rotation and a pi/2 rotation.
 
-    Returns:
-        Pi gain value
+    Parameters
+    ----------
+    p : list of float
+        Fit parameters ``[yscale, freq, phase_deg, y0]`` from a sinusoidal fit.
+
+    Returns
+    -------
+    pi_gain : float
+        Gain value for a pi rotation.
+    pi2_gain : float
+        Gain value for a pi/2 rotation.
     """
     if p[2] > 180:
         p[2] = p[2] - 360
@@ -318,15 +505,27 @@ def fourier_init(
     xdata: np.ndarray, ydata: np.ndarray, debug: bool = False
 ) -> Tuple[float, float]:
     """
-    Initialize frequency and phase using Fourier transform.
+    Estimate oscillation frequency and phase using a full complex FFT.
 
-    Args:
-        xdata: X-axis data points
-        ydata: Y-axis data points
-        debug: If True, plots the Fourier transform for debugging
+    Subtracts the mean from ydata, computes the FFT, and returns the
+    frequency and phase of the dominant positive-frequency component.
 
-    Returns:
-        Tuple of (max_frequency, max_phase)
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Uniformly spaced x-axis values.
+    ydata : np.ndarray
+        Signal values corresponding to xdata.
+    debug : bool, optional
+        If True, displays a two-panel plot of FFT magnitude and phase.
+        Default is False.
+
+    Returns
+    -------
+    max_freq : float
+        Frequency of the dominant spectral component.
+    max_phase : float
+        Phase (radians) of the dominant spectral component.
     """
     ydata = ydata - np.mean(ydata)
     fourier = np.fft.fft(ydata)
@@ -366,14 +565,22 @@ def validate_bounds(
     fitparams: List[float], bounds: Tuple[List[float], List[float]]
 ) -> List[float]:
     """
-    Validate that parameters are within bounds and adjust if necessary.
+    Validate that initial fit parameters lie within specified bounds.
 
-    Args:
-        fitparams: List of fit parameters
-        bounds: Tuple of (lower_bounds, upper_bounds)
+    Any parameter outside its bounds is reset to the midpoint of the
+    corresponding interval, and a warning is printed.
 
-    Returns:
-        Validated fit parameters
+    Parameters
+    ----------
+    fitparams : list of float
+        Initial parameter estimates to validate.
+    bounds : tuple of (list of float, list of float)
+        ``(lower_bounds, upper_bounds)`` with one entry per parameter.
+
+    Returns
+    -------
+    fitparams : list of float
+        Validated parameter list with out-of-bounds values replaced.
     """
     for i, param in enumerate(fitparams):
         if not (bounds[0][i] < param < bounds[1][i]):
@@ -393,12 +600,17 @@ def expfunc(x: np.ndarray, *p) -> np.ndarray:
     """
     Exponential decay function.
 
-    Args:
-        x: X-axis data points
-        p: Parameters [y0, yscale, decay]
+    Parameters
+    ----------
+    x : np.ndarray
+        Independent variable values.
+    *p : float
+        Parameters ``(y0, yscale, decay)``.
 
-    Returns:
-        y = y0 + yscale*exp(-x/decay)
+    Returns
+    -------
+    y : np.ndarray
+        ``y0 + yscale * exp(-x / decay)``
     """
     y0, yscale, decay = p
     return y0 + yscale * np.exp(-x / decay)
@@ -408,12 +620,17 @@ def expfunc2(x: np.ndarray, *p) -> np.ndarray:
     """
     Exponential decay function with x offset.
 
-    Args:
-        x: X-axis data points
-        p: Parameters [y0, yscale, x0, decay]
+    Parameters
+    ----------
+    x : np.ndarray
+        Independent variable values.
+    *p : float
+        Parameters ``(y0, yscale, x0, decay)``.
 
-    Returns:
-        y = y0 + yscale*exp(-(x-x0)/decay)
+    Returns
+    -------
+    y : np.ndarray
+        ``y0 + yscale * exp(-(x - x0) / decay)``
     """
     y0, yscale, x0, decay = p
     return y0 + yscale * np.exp(-(x - x0) / decay)
@@ -423,15 +640,28 @@ def fitexp(
     xdata: np.ndarray, ydata: np.ndarray, fitparams: Optional[List[float]] = None
 ) -> Tuple[List[float], np.ndarray, List[float]]:
     """
-    Fit data to an exponential decay.
+    Fit data to an exponential decay model.
 
-    Args:
-        xdata: X-axis data points
-        ydata: Y-axis data points
-        fitparams: Optional initial parameters [y0, yscale, decay]
+    Auto-initializes parameters from data statistics when not provided.
 
-    Returns:
-        Tuple of (optimized_parameters, covariance_matrix, initial_parameters)
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Independent variable data.
+    ydata : np.ndarray
+        Dependent variable data.
+    fitparams : list of float, optional
+        Initial parameters ``[y0, yscale, decay]``. Use None for any element
+        to trigger auto-initialization.
+
+    Returns
+    -------
+    pOpt : list of float
+        Optimized parameters.
+    pCov : np.ndarray
+        Covariance matrix.
+    fitparams : list of float
+        Initial parameters used.
     """
     if fitparams is None:
         fitparams = [None] * 3
@@ -462,12 +692,17 @@ def lorfunc(x: np.ndarray, *p) -> np.ndarray:
     """
     Lorentzian function.
 
-    Args:
-        x: X-axis data points
-        p: Parameters [y0, yscale, x0, xscale]
+    Parameters
+    ----------
+    x : np.ndarray
+        Independent variable values.
+    *p : float
+        Parameters ``(y0, yscale, x0, xscale)``.
 
-    Returns:
-        y = y0 + yscale/(1+(x-x0)²/xscale²)
+    Returns
+    -------
+    y : np.ndarray
+        ``y0 + yscale / (1 + (x - x0)^2 / xscale^2)``
     """
     y0, yscale, x0, xscale = p
     return y0 + yscale / (1 + (x - x0) ** 2 / xscale**2)
@@ -479,13 +714,26 @@ def fitlor(
     """
     Fit data to a Lorentzian function.
 
-    Args:
-        xdata: X-axis data points
-        ydata: Y-axis data points
-        fitparams: Optional initial parameters [y0, yscale, x0, xscale]
+    Auto-initializes parameters from data statistics when not provided.
 
-    Returns:
-        Tuple of (optimized_parameters, covariance_matrix, initial_parameters)
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Independent variable data.
+    ydata : np.ndarray
+        Dependent variable data.
+    fitparams : list of float, optional
+        Initial parameters ``[y0, yscale, x0, xscale]``. Use None for any
+        element to trigger auto-initialization.
+
+    Returns
+    -------
+    pOpt : list of float
+        Optimized parameters.
+    pCov : np.ndarray
+        Covariance matrix.
+    fitparams : list of float
+        Initial parameters used.
     """
     if fitparams is None:
         fitparams = [None] * 4
@@ -515,11 +763,48 @@ def fitlor(
 
 
 def asym_lorfunc(x, *p):
+    """
+    Asymmetric Lorentzian function.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Independent variable values.
+    *p : float
+        Parameters ``(y0, A, x0, gamma, alpha)``.
+
+    Returns
+    -------
+    y : np.ndarray
+        ``y0 + A / (1 + ((x - x0) / (gamma * (1 + alpha * (x - x0))))^2)``
+    """
     y0, A, x0, gamma, alpha = p
     return y0 + A / (1 + ((x - x0) / (gamma * (1 + alpha * (x - x0)))) ** 2)
 
 
 def fit_asym_lor(xdata, ydata, fitparams=None):
+    """
+    Fit data to an asymmetric Lorentzian function.
+
+    Auto-initializes parameters from data statistics when not provided.
+
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Independent variable data.
+    ydata : np.ndarray
+        Dependent variable data.
+    fitparams : list of float, optional
+        Initial parameters ``[y0, A, x0, gamma, alpha]``. Use None for any
+        element to trigger auto-initialization.
+
+    Returns
+    -------
+    pOpt : np.ndarray
+        Optimized parameters.
+    pCov : np.ndarray
+        Covariance matrix, or inf-filled on failure.
+    """
     if fitparams is None:
         fitparams = [None] * 5
     else:
@@ -554,12 +839,17 @@ def sinfunc(x: np.ndarray, *p) -> np.ndarray:
     """
     Sinusoidal function.
 
-    Args:
-        x: X-axis data points
-        p: Parameters [yscale, freq, phase_deg, y0]
+    Parameters
+    ----------
+    x : np.ndarray
+        Independent variable values.
+    *p : float
+        Parameters ``(yscale, freq, phase_deg, y0)``.
 
-    Returns:
-        y = yscale*sin(2π*freq*x + phase_deg*π/180) + y0
+    Returns
+    -------
+    y : np.ndarray
+        ``yscale * sin(2*pi*freq*x + phase_deg*pi/180) + y0``
     """
     yscale, freq, phase_deg, y0 = p
     return yscale * np.sin(2 * np.pi * freq * x + phase_deg * np.pi / 180) + y0
@@ -574,14 +864,28 @@ def fitsin(
     """
     Fit data to a sinusoidal function.
 
-    Args:
-        xdata: X-axis data points
-        ydata: Y-axis data points
-        fitparams: Optional initial parameters [yscale, freq, phase_deg, y0]
-        debug: If True, shows debug information
+    Uses ``fourier_init`` to auto-initialize frequency and phase from the FFT.
 
-    Returns:
-        Tuple of (optimized_parameters, covariance_matrix, initial_parameters)
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Independent variable data.
+    ydata : np.ndarray
+        Dependent variable data.
+    fitparams : list of float, optional
+        Initial parameters ``[yscale, freq, phase_deg, y0]``. Use None for
+        any element to trigger auto-initialization.
+    debug : bool, optional
+        Passed to ``fourier_init`` for FFT debug plotting. Default is False.
+
+    Returns
+    -------
+    pOpt : list of float
+        Optimized parameters.
+    pCov : np.ndarray
+        Covariance matrix.
+    fitparams : list of float
+        Initial parameters used.
     """
     if fitparams is None:
         fitparams = [None] * 4
@@ -618,12 +922,17 @@ def decaysin(x: np.ndarray, *p) -> np.ndarray:
     """
     Decaying sinusoidal function.
 
-    Args:
-        x: X-axis data points
-        p: Parameters [yscale, freq, phase_deg, decay, y0]
+    Parameters
+    ----------
+    x : np.ndarray
+        Independent variable values.
+    *p : float
+        Parameters ``(yscale, freq, phase_deg, decay, y0)``.
 
-    Returns:
-        y = yscale*sin(2π*freq*x + phase_deg*π/180)*exp(-x/decay) + y0
+    Returns
+    -------
+    y : np.ndarray
+        ``yscale * sin(2*pi*freq*x + phase_deg*pi/180) * exp(-x/decay) + y0``
     """
     yscale, freq, phase_deg, decay, y0 = p
     return (
@@ -643,14 +952,29 @@ def fitdecaysin(
     """
     Fit data to a decaying sinusoidal function.
 
-    Args:
-        xdata: X-axis data points
-        ydata: Y-axis data points
-        fitparams: Optional initial parameters [yscale, freq, phase_deg, decay, y0]
-        debug: If True, shows debug information
+    Uses ``fourier_init`` to auto-initialize frequency and phase. If the
+    first attempt fails, retries with an inverted phase.
 
-    Returns:
-        Tuple of (optimized_parameters, covariance_matrix, initial_parameters)
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Independent variable data.
+    ydata : np.ndarray
+        Dependent variable data.
+    fitparams : list of float, optional
+        Initial parameters ``[yscale, freq, phase_deg, decay, y0]``. Use
+        None for any element to trigger auto-initialization.
+    debug : bool, optional
+        Passed to ``fourier_init`` for FFT debug plotting. Default is False.
+
+    Returns
+    -------
+    pOpt : list of float
+        Optimized parameters, or NaN-filled on failure.
+    pCov : np.ndarray
+        Covariance matrix, or inf-filled on failure.
+    fitparams : list of float
+        Initial parameters used.
     """
     if fitparams is None:
         fitparams = [None] * 5
@@ -706,14 +1030,19 @@ def fitdecaysin(
 
 def decayslopesin(x: np.ndarray, *p) -> np.ndarray:
     """
-    Decaying sinusoidal function with slope.
+    Decaying sinusoidal function with a linear slope envelope.
 
-    Args:
-        x: X-axis data points
-        p: Parameters [yscale, freq, phase_deg, decay, y0, slope]
+    Parameters
+    ----------
+    x : np.ndarray
+        Independent variable values.
+    *p : float
+        Parameters ``(yscale, freq, phase_deg, decay, y0, slope)``.
 
-    Returns:
-        y = yscale*(sin(2π*freq*x + phase_deg*π/180) + slope)*exp(-x/decay) + y0
+    Returns
+    -------
+    y : np.ndarray
+        ``yscale * (sin(2*pi*freq*x + phase_deg*pi/180) + slope) * exp(-x/decay) + y0``
     """
     yscale, freq, phase_deg, decay, y0, slope = p
     return (
@@ -731,16 +1060,31 @@ def fitdecayslopesin(
     debug: bool = False,
 ) -> Tuple[List[float], np.ndarray, List[float]]:
     """
-    Fit data to a decaying sinusoidal function with slope.
+    Fit data to a decaying sinusoidal function with a linear slope envelope.
 
-    Args:
-        xdata: X-axis data points
-        ydata: Y-axis data points
-        fitparams: Optional initial parameters [yscale, freq, phase_deg, decay, y0, slope]
-        debug: If True, shows debug information
+    Uses ``fourier_init`` to auto-initialize frequency and phase. Retries
+    with phase adjustments on failure.
 
-    Returns:
-        Tuple of (optimized_parameters, covariance_matrix, initial_parameters)
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Independent variable data.
+    ydata : np.ndarray
+        Dependent variable data.
+    fitparams : list of float, optional
+        Initial parameters ``[yscale, freq, phase_deg, decay, y0, slope]``.
+        Use None for any element to trigger auto-initialization.
+    debug : bool, optional
+        Passed to ``fourier_init`` for FFT debug plotting. Default is False.
+
+    Returns
+    -------
+    pOpt : list of float
+        Optimized parameters, or NaN-filled on failure.
+    pCov : np.ndarray
+        Covariance matrix, or inf-filled on failure.
+    fitparams : list of float
+        Initial parameters used.
     """
     if fitparams is None:
         fitparams = [None] * 6
@@ -798,12 +1142,22 @@ def twofreq_decaysin(x: np.ndarray, *p) -> np.ndarray:
     """
     Two-frequency decaying sinusoidal function.
 
-    Args:
-        x: X-axis data points
-        p: Parameters [yscale0, freq0, phase_deg0, decay0, y00, x00, yscale1, freq1, phase_deg1, y01]
+    Models a signal as a product of a decaying sinusoid and a slow sinusoidal
+    modulation envelope.
 
-    Returns:
-        y = y00 + decaysin(x, *p0) * sinfunc(x, *p1)
+    Parameters
+    ----------
+    x : np.ndarray
+        Independent variable values.
+    *p : float
+        Parameters ``(yscale0, freq0, phase_deg0, decay0, y00, x00,
+        yscale1, freq1, phase_deg1, y01)``.
+
+    Returns
+    -------
+    y : np.ndarray
+        ``y00 + decaysin(x, yscale0, freq0, phase_deg0, decay0, 0)
+        * sinfunc(x, yscale1, freq1, phase_deg1, y01)``
     """
     yscale0, freq0, phase_deg0, decay0, y00, x00, yscale1, freq1, phase_deg1, y01 = p
     p0 = [yscale0, freq0, phase_deg0, decay0, 0]
@@ -817,13 +1171,24 @@ def fittwofreq_decaysin(
     """
     Fit data to a two-frequency decaying sinusoidal function.
 
-    Args:
-        xdata: X-axis data points
-        ydata: Y-axis data points
-        fitparams: Optional initial parameters
+    Auto-initializes parameters using the FFT of the data.
 
-    Returns:
-        Tuple of (optimized_parameters, covariance_matrix)
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Independent variable data.
+    ydata : np.ndarray
+        Dependent variable data.
+    fitparams : list of float, optional
+        Initial parameters (10 elements). Use None for any element to
+        trigger auto-initialization.
+
+    Returns
+    -------
+    pOpt : list of float
+        Optimized parameters.
+    pCov : np.ndarray
+        Covariance matrix.
     """
     if fitparams is None:
         fitparams = [None] * 10
@@ -904,10 +1269,53 @@ def fittwofreq_decaysin(
 # Gaussian Fit Functions
 # ====================================================== #
 def gaussian(x, a, x0, sigma, y0):
+    """
+    Single Gaussian function with baseline offset.
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Independent variable values.
+    a : float
+        Amplitude of the Gaussian peak.
+    x0 : float
+        Center of the Gaussian.
+    sigma : float
+        Standard deviation (width) of the Gaussian.
+    y0 : float
+        Baseline offset.
+
+    Returns
+    -------
+    y : np.ndarray
+        ``a * exp(-(x - x0)^2 / (2 * sigma^2)) + y0``
+    """
     return a * np.exp(-((x - x0) ** 2) / (2 * sigma**2)) + y0
 
 
 def fit_gauss(xdata, ydata, fitparams=None):
+    """
+    Fit data to a single Gaussian function.
+
+    Auto-initializes parameters from data statistics when not provided.
+
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Independent variable data (bin centers).
+    ydata : np.ndarray
+        Dependent variable data (counts or histogram values).
+    fitparams : list of float, optional
+        Initial parameters ``[a, x0, sigma, y0]``. Use None for any element
+        to trigger auto-initialization.
+
+    Returns
+    -------
+    pOpt : np.ndarray
+        Optimized parameters.
+    pCov : np.ndarray
+        Covariance matrix, or inf-filled on failure.
+    """
     # xmed, xstd should be gotten from the single shot data prior to fitting the histogram
     if fitparams is None:
         fitparams = [None] * 4
@@ -957,7 +1365,28 @@ def fit_gauss(xdata, ydata, fitparams=None):
 def double_gaussian(x, a1, b1, c1, a2, b2, c2):
     """
     Standard double Gaussian function.
-    Params: a=amplitude, b=mean, c=sigma
+
+    Parameters
+    ----------
+    x : np.ndarray
+        Independent variable values.
+    a1 : float
+        Amplitude of the first Gaussian.
+    b1 : float
+        Mean of the first Gaussian.
+    c1 : float
+        Standard deviation of the first Gaussian.
+    a2 : float
+        Amplitude of the second Gaussian.
+    b2 : float
+        Mean of the second Gaussian.
+    c2 : float
+        Standard deviation of the second Gaussian.
+
+    Returns
+    -------
+    y : np.ndarray
+        Sum of the two Gaussians.
     """
     return a1 * np.exp(-((x - b1) ** 2) / (2 * c1**2)) + a2 * np.exp(
         -((x - b2) ** 2) / (2 * c2**2)
@@ -968,14 +1397,24 @@ def fit_doublegauss(xdata, ydata, fitparams):
     """
     Robust fitting function for double Gaussian distributions.
 
-    Args:
-        xdata: Bin centers.
-        ydata: Counts/Histogram values.
-        fitparams: Initial guesses [amp_g, mu_g, sigma_g, amp_e, mu_e, sigma_e].
+    Constrains each Gaussian mean to within ±2σ of the initial guess to
+    prevent the solver from merging both peaks into a single visible one.
 
-    Returns:
-        pOpt: Optimized parameters.
-        pCov: Covariance matrix.
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Bin centers.
+    ydata : np.ndarray
+        Counts or histogram values.
+    fitparams : list of float
+        Initial guesses ``[amp_g, mu_g, sigma_g, amp_e, mu_e, sigma_e]``.
+
+    Returns
+    -------
+    pOpt : np.ndarray
+        Optimized parameters, or initial guesses on failure.
+    pCov : np.ndarray
+        Covariance matrix, or zero matrix on failure.
     """
     # Unpack parameters to set dynamic bounds
     ag, mug, sig, ae, mue, sie = fitparams
@@ -1018,14 +1457,19 @@ def fit_doublegauss(xdata, ydata, fitparams):
 
 def hangerfunc(x: np.ndarray, *p) -> np.ndarray:
     """
-    Complex Hanger function for resonator fitting.
+    Complex Hanger (notch) function for resonator S21 fitting.
 
-    Args:
-        x: X-axis data points (frequency)
-        p: Parameters [f0, Qi, Qe, phi, scale]
+    Parameters
+    ----------
+    x : np.ndarray
+        Frequency values.
+    *p : float
+        Parameters ``(f0, Qi, Qe, phi, scale)``.
 
-    Returns:
-        Complex S21 response
+    Returns
+    -------
+    S21 : np.ndarray
+        Complex S21 transmission response.
     """
     f0, Qi, Qe, phi, scale = p
     Q0 = 1 / (1 / Qi + np.real(1 / Qe))
@@ -1034,14 +1478,19 @@ def hangerfunc(x: np.ndarray, *p) -> np.ndarray:
 
 def hangerS21func(x: np.ndarray, *p) -> np.ndarray:
     """
-    Magnitude of Hanger function for resonator fitting.
+    Magnitude of the Hanger function for resonator S21 fitting.
 
-    Args:
-        x: X-axis data points (frequency)
-        p: Parameters [f0, Qi, Qe, phi, scale]
+    Parameters
+    ----------
+    x : np.ndarray
+        Frequency values.
+    *p : float
+        Parameters ``(f0, Qi, Qe, phi, scale)``.
 
-    Returns:
-        Magnitude of S21 response
+    Returns
+    -------
+    mag : np.ndarray
+        Magnitude of the S21 transmission response.
     """
     f0, Qi, Qe, phi, scale = p
     Q0 = 1 / (1 / Qi + np.real(1 / Qe))
@@ -1050,14 +1499,19 @@ def hangerS21func(x: np.ndarray, *p) -> np.ndarray:
 
 def hangerS21func_sloped(x: np.ndarray, *p) -> np.ndarray:
     """
-    Magnitude of Hanger function with slope for resonator fitting.
+    Magnitude of the Hanger function with a linear background slope.
 
-    Args:
-        x: X-axis data points (frequency)
-        p: Parameters [f0, Qi, Qe, phi, scale, slope]
+    Parameters
+    ----------
+    x : np.ndarray
+        Frequency values.
+    *p : float
+        Parameters ``(f0, Qi, Qe, phi, scale, slope)``.
 
-    Returns:
-        Magnitude of S21 response with slope
+    Returns
+    -------
+    mag : np.ndarray
+        Magnitude of S21 with a linear slope added.
     """
     f0, Qi, Qe, phi, scale, slope = p
     return hangerS21func(x, f0, 1e4 * Qi, 1e4 * Qe, phi, scale) + slope * (x - f0)
@@ -1065,14 +1519,19 @@ def hangerS21func_sloped(x: np.ndarray, *p) -> np.ndarray:
 
 def hangerphasefunc(x: np.ndarray, *p) -> np.ndarray:
     """
-    Phase of Hanger function for resonator fitting.
+    Phase of the Hanger function for resonator fitting.
 
-    Args:
-        x: X-axis data points (frequency)
-        p: Parameters [f0, Qi, Qe, phi, scale]
+    Parameters
+    ----------
+    x : np.ndarray
+        Frequency values.
+    *p : float
+        Parameters ``(f0, Qi, Qe, phi, scale)``.
 
-    Returns:
-        Phase of S21 response
+    Returns
+    -------
+    phase : np.ndarray
+        Phase of the S21 transmission response (radians).
     """
     return np.angle(hangerfunc(x, *p))
 
@@ -1081,15 +1540,29 @@ def fithanger(
     xdata: np.ndarray, ydata: np.ndarray, fitparams: Optional[List[float]] = None
 ) -> Tuple[List[float], np.ndarray, List[float]]:
     """
-    Fit data to a Hanger function.
+    Fit resonator transmission data to a sloped Hanger function.
 
-    Args:
-        xdata: X-axis data points (frequency)
-        ydata: Y-axis data points (magnitude)
-        fitparams: Optional initial parameters [f0, Qi, Qe, phi, scale, slope]
+    Performs two sequential curve_fit calls for improved convergence.
+    Auto-initializes parameters when not provided.
 
-    Returns:
-        Tuple of (optimized_parameters, covariance_matrix, initial_parameters)
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Frequency data points.
+    ydata : np.ndarray
+        Magnitude of S21 data points.
+    fitparams : list of float, optional
+        Initial parameters ``[f0, Qi, Qe, phi, scale, slope]``. Use None
+        for any element to trigger auto-initialization.
+
+    Returns
+    -------
+    pOpt : list of float
+        Optimized parameters.
+    pCov : np.ndarray
+        Covariance matrix, or inf-filled on failure.
+    fitparams : list of float
+        Initial parameters used.
     """
     if fitparams is None:
         fitparams = [None] * 6
@@ -1138,59 +1611,82 @@ def fithanger(
 
 def rb_func(depth: np.ndarray, p: float, a: float, b: float) -> np.ndarray:
     """
-    Randomized benchmarking function.
+    Randomized benchmarking decay function.
 
-    Args:
-        depth: Sequence depth
-        p: Depolarizing parameter
-        a: Amplitude
-        b: Offset
+    Parameters
+    ----------
+    depth : np.ndarray
+        Sequence depth (number of Clifford gates).
+    p : float
+        Depolarizing parameter (decay base).
+    a : float
+        Amplitude of the decay.
+    b : float
+        Asymptotic offset (floor) at large depth.
 
-    Returns:
-        Fidelity as a function of sequence depth
+    Returns
+    -------
+    fidelity : np.ndarray
+        ``a * p**depth + b``
     """
     return a * p**depth + b
 
 
 def rb_error(p: float, d: int) -> float:
     """
-    Calculate average error rate over all gates in sequence.
+    Calculate the average error rate per Clifford from the RB decay parameter.
 
-    Args:
-        p: Depolarizing parameter
-        d: Dimension of system (2^number of qubits)
+    Parameters
+    ----------
+    p : float
+        Depolarizing parameter from the RB fit.
+    d : int
+        Hilbert space dimension (2 for a single qubit).
 
-    Returns:
-        Average error rate
+    Returns
+    -------
+    epc : float
+        Error per Clifford (average gate error rate).
     """
     return 1 - (p + (1 - p) / d)
 
 
 def error_fit_err(cov_p: float, d: int) -> float:
     """
-    Return covariance of randomized benchmarking error.
+    Propagate the covariance of p to the uncertainty in EPC.
 
-    Args:
-        cov_p: Covariance of depolarizing parameter
-        d: Dimension of system (2^number of qubits)
+    Parameters
+    ----------
+    cov_p : float
+        Variance (diagonal covariance element) of the depolarizing parameter p.
+    d : int
+        Hilbert space dimension (2 for a single qubit).
 
-    Returns:
-        Covariance of error
+    Returns
+    -------
+    var_epc : float
+        Variance of the error per Clifford.
     """
     return cov_p * (1 / d - 1) ** 2
 
 
 def rb_gate_fidelity(p_rb: float, p_irb: float, d: int) -> float:
     """
-    Calculate gate fidelity from regular and interleaved RB.
+    Calculate gate fidelity from standard and interleaved RB parameters.
 
-    Args:
-        p_rb: Depolarizing parameter from regular RB
-        p_irb: Depolarizing parameter from interleaved RB
-        d: Dimension of system (2^number of qubits)
+    Parameters
+    ----------
+    p_rb : float
+        Depolarizing parameter from standard (reference) RB.
+    p_irb : float
+        Depolarizing parameter from interleaved RB.
+    d : int
+        Hilbert space dimension (2 for a single qubit).
 
-    Returns:
-        Gate fidelity
+    Returns
+    -------
+    fidelity : float
+        Gate fidelity of the interleaved gate.
     """
     return 1 - (d - 1) * (1 - p_irb / p_rb) / d
 
@@ -1248,10 +1744,34 @@ def fitrb(
     maxfev: int = 10000,
 ) -> Tuple[List[float], np.ndarray]:
     """
-    Fit data to a * p**depth + b.
+    Fit data to the RB decay model ``a * p**depth + b``.
 
-    p_bounds : (p_min, p_max) — tighten this to constrain the depolarizing
-               parameter, e.g. (0.95, 1.0) for a high-fidelity qubit.
+    Uses a log-linear initial estimate for p and unconstrained bounds for
+    a and b to handle inverted IQ signals. Prints fitted values and
+    standard deviations on success.
+
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Sequence depth values.
+    ydata : np.ndarray
+        Measured signal (fidelity or IQ amplitude) at each depth.
+    fitparams : list of float, optional
+        Initial parameters ``[p, a, b]``. Use None for any element to
+        trigger smart auto-initialization.
+    p_bounds : tuple of (float, float), optional
+        ``(p_min, p_max)`` bounds for the depolarizing parameter.
+        Tighten to constrain the fit, e.g. ``(0.95, 1.0)`` for a
+        high-fidelity qubit. Default is ``(0.0, 1.0)``.
+    maxfev : int, optional
+        Maximum number of function evaluations. Default is 10000.
+
+    Returns
+    -------
+    pOpt : list of float
+        Optimized parameters ``[p, a, b]``, or NaN-filled on failure.
+    pCov : np.ndarray
+        3×3 covariance matrix, or inf-filled on failure.
     """
     y = np.asarray(ydata, dtype=float)
     x = np.asarray(xdata, dtype=float)
@@ -1336,32 +1856,46 @@ def adiabatic_amp(
     t: np.ndarray, amp_max: float, beta: float, period: float
 ) -> np.ndarray:
     """
-    Amplitude function for adiabatic pi pulse.
+    Amplitude envelope for an adiabatic pi pulse (sech shape).
 
-    Args:
-        t: Time points
-        amp_max: Maximum amplitude
-        beta: Slope of frequency sweep
-        period: Period of pulse
+    Parameters
+    ----------
+    t : np.ndarray
+        Time points.
+    amp_max : float
+        Peak amplitude of the pulse.
+    beta : float
+        Controls the steepness of the sech envelope.
+    period : float
+        Total pulse duration.
 
-    Returns:
-        Amplitude as a function of time
+    Returns
+    -------
+    amp : np.ndarray
+        ``amp_max / cosh(beta * (2*t/period - 1))``
     """
     return amp_max / np.cosh(beta * (2 * t / period - 1))
 
 
 def adiabatic_phase(t: np.ndarray, mu: float, beta: float, period: float) -> np.ndarray:
     """
-    Phase function for adiabatic pi pulse.
+    Phase function for an adiabatic pi pulse.
 
-    Args:
-        t: Time points
-        mu: Width of frequency sweep
-        beta: Slope of frequency sweep
-        period: Period of pulse
+    Parameters
+    ----------
+    t : np.ndarray
+        Time points.
+    mu : float
+        Width of the frequency sweep (related to bandwidth).
+    beta : float
+        Steepness parameter of the sech envelope.
+    period : float
+        Total pulse duration.
 
-    Returns:
-        Phase as a function of time
+    Returns
+    -------
+    phase : np.ndarray
+        ``mu * log(adiabatic_amp(t, 1, beta, period))``
     """
     return mu * np.log(adiabatic_amp(t, amp_max=1, beta=beta, period=period))
 
@@ -1370,17 +1904,27 @@ def adiabatic_iqamp(
     t: np.ndarray, amp_max: float, mu: float, beta: float, period: float
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
-    Calculate I and Q amplitudes for adiabatic pi pulse.
+    Calculate I and Q amplitudes for an adiabatic pi pulse.
 
-    Args:
-        t: Time points
-        amp_max: Maximum amplitude
-        mu: Width of frequency sweep
-        beta: Slope of frequency sweep
-        period: Period of pulse
+    Parameters
+    ----------
+    t : np.ndarray
+        Time points.
+    amp_max : float
+        Peak amplitude.
+    mu : float
+        Width of the frequency sweep.
+    beta : float
+        Steepness of the sech envelope.
+    period : float
+        Total pulse duration.
 
-    Returns:
-        Tuple of (I amplitude, Q amplitude)
+    Returns
+    -------
+    iamp : np.ndarray
+        In-phase (I) amplitude component.
+    qamp : np.ndarray
+        Quadrature (Q) amplitude component.
     """
     amp = np.abs(adiabatic_amp(t, amp_max=amp_max, beta=beta, period=period))
     phase = adiabatic_phase(t, mu=mu, beta=beta, period=period)
@@ -1396,18 +1940,67 @@ def adiabatic_iqamp(
 
 
 def probg_Xhalf(n, *p):
+    """
+    Ground-state probability for a repeated X/2 pulse sequence.
+
+    Parameters
+    ----------
+    n : np.ndarray
+        Number of repetitions.
+    *p : float
+        Parameters ``(a, delta)`` where a is an offset and delta is the
+        rotation angle error in degrees.
+
+    Returns
+    -------
+    prob : np.ndarray
+        ``a + 0.5 * (-1)^n * cos(pi/2 + 2*n*delta_rad)``
+    """
     a, delta = p
     delta = delta * np.pi / 180
     return a + (0.5 * (-1) ** n * np.cos(np.pi / 2 + 2 * n * delta))
 
 
 def probg_X(n, *p):
+    """
+    Ground-state probability for a repeated X pulse sequence.
+
+    Parameters
+    ----------
+    n : np.ndarray
+        Number of repetitions.
+    *p : float
+        Parameters ``(a, delta)`` where a is an offset and delta is the
+        rotation angle error in degrees.
+
+    Returns
+    -------
+    prob : np.ndarray
+        ``a + 0.5 * cos(pi/2 + 2*n*delta_rad)``
+    """
     a, delta = p
     delta = delta * np.pi / 180
     return a + (0.5 * np.cos(np.pi / 2 + 2 * n * delta))
 
 
 def probg_Xhalf_decay(n, *p):
+    """
+    Decaying ground-state probability for a repeated X/2 pulse sequence.
+
+    Parameters
+    ----------
+    n : np.ndarray
+        Number of repetitions.
+    *p : float
+        Parameters ``(a, delta, decay)`` where a is an offset, delta is
+        the rotation angle error in degrees, and decay is the exponential
+        decay constant.
+
+    Returns
+    -------
+    prob : np.ndarray
+        ``a + 0.5 * (-1)^n * cos(pi/2 + 2*n*delta_rad) * exp(-n/decay)``
+    """
     a, delta, decay = p
     delta = delta * np.pi / 180
     return a + (0.5 * (-1) ** n * np.cos(np.pi / 2 + 2 * n * delta)) * np.exp(
@@ -1416,6 +2009,25 @@ def probg_Xhalf_decay(n, *p):
 
 
 def fit_probg_Xhalf(xdata, ydata, fitparams=None):
+    """
+    Fit data to the X/2 repeated pulse rotation error model.
+
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Number of repetitions.
+    ydata : np.ndarray
+        Measured ground-state probability.
+    fitparams : list of float, optional
+        Initial parameters ``[a, delta]``. Use None for auto-initialization.
+
+    Returns
+    -------
+    pOpt : np.ndarray
+        Optimized parameters.
+    pCov : np.ndarray
+        Covariance matrix, or inf-filled on failure.
+    """
     if fitparams is None:
         fitparams = [None] * 2
     else:
@@ -1448,6 +2060,25 @@ def fit_probg_Xhalf(xdata, ydata, fitparams=None):
 
 
 def fit_probg_X(xdata, ydata, fitparams=None):
+    """
+    Fit data to the X repeated pulse rotation error model.
+
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Number of repetitions.
+    ydata : np.ndarray
+        Measured ground-state probability.
+    fitparams : list of float, optional
+        Initial parameters ``[a, delta]``. Use None for auto-initialization.
+
+    Returns
+    -------
+    pOpt : np.ndarray
+        Optimized parameters.
+    pCov : np.ndarray
+        Covariance matrix, or inf-filled on failure.
+    """
     if fitparams is None:
         fitparams = [None] * 2
     else:
@@ -1480,6 +2111,26 @@ def fit_probg_X(xdata, ydata, fitparams=None):
 
 
 def fit_probg_Xhalf_decay(xdata, ydata, fitparams=None):
+    """
+    Fit data to the decaying X/2 repeated pulse rotation error model.
+
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Number of repetitions.
+    ydata : np.ndarray
+        Measured ground-state probability.
+    fitparams : list of float, optional
+        Initial parameters ``[a, delta, decay]``. Use None for
+        auto-initialization.
+
+    Returns
+    -------
+    pOpt : np.ndarray
+        Optimized parameters.
+    pCov : np.ndarray
+        Covariance matrix, or inf-filled on failure.
+    """
     if fitparams is None:
         fitparams = [None] * 3
     else:
@@ -1515,11 +2166,45 @@ def fit_probg_Xhalf_decay(xdata, ydata, fitparams=None):
 
 # ====================================================== #
 def poisson(n, *p):
+    """
+    Poisson distribution probability mass function.
+
+    Parameters
+    ----------
+    n : np.ndarray
+        Non-negative integer values (photon numbers).
+    *p : float
+        Parameters ``(nbar,)`` where nbar is the mean photon number.
+
+    Returns
+    -------
+    prob : np.ndarray
+        ``exp(-nbar) * nbar^n / n!``
+    """
     nbar = p[0]
     return np.exp(-nbar) * (nbar**n) / sp.special.factorial(n)
 
 
 def fit_poisson(xdata, ydata, fitparams=None):
+    """
+    Fit data to a Poisson distribution.
+
+    Parameters
+    ----------
+    xdata : np.ndarray
+        Non-negative integer values (photon numbers).
+    ydata : np.ndarray
+        Measured probability or count data.
+    fitparams : list of float, optional
+        Initial parameters ``[nbar]``. Use None for auto-initialization.
+
+    Returns
+    -------
+    pOpt : np.ndarray
+        Optimized parameters.
+    pCov : np.ndarray
+        Covariance matrix, or inf-filled on failure.
+    """
     if fitparams is None:
         fitparams = [None] * 1
     else:

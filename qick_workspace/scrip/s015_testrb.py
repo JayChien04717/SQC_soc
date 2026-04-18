@@ -137,6 +137,26 @@ for name, matrix in clifford_1q.items():
 
 
 def gate_sequence(rb_depth, pulse_n_seq=None, debug=False):
+    """
+    Generate a random Clifford gate sequence with its inverting gate.
+
+    Parameters
+    ----------
+    rb_depth : int
+        Number of random Clifford gates in the sequence.
+    pulse_n_seq : array-like of int or None, optional
+        Explicit sequence of Clifford indices.  If ``None``, a random
+        sequence is generated.
+    debug : bool, optional
+        Print the gate sequence and its inverse when ``True``.
+
+    Returns
+    -------
+    pulse_name_seq : list of str
+        List of Clifford gate names (may be composite, e.g. ``"X/2,Y"``).
+    total_clifford : str
+        Name of the inverting Clifford gate.
+    """
     if pulse_n_seq is None:
         pulse_n_seq = (len(clifford_1q_names) * np.random.rand(rb_depth)).astype(int)
     pulse_name_seq = [clifford_1q_names[n] for n in pulse_n_seq]
@@ -167,6 +187,28 @@ def gate_sequence(rb_depth, pulse_n_seq=None, debug=False):
 
 
 def interleaved_gate_sequence(rb_depth, gate_char: str, debug=False):
+    """
+    Generate an interleaved Clifford gate sequence for IRB.
+
+    Interleaves ``gate_char`` after every random Clifford and returns the
+    combined sequence with its inverting gate.
+
+    Parameters
+    ----------
+    rb_depth : int
+        Number of random Clifford gates (interleaved gate doubles the depth).
+    gate_char : str
+        Gate name to interleave (must be in ``clifford_1q_names``).
+    debug : bool, optional
+        Forwarded to ``gate_sequence`` for debug printing.
+
+    Returns
+    -------
+    pulse_name_seq : list of str
+        Combined (interleaved) Clifford gate name sequence.
+    total_clifford : str
+        Name of the inverting Clifford gate.
+    """
     pulse_n_seq_rand = (len(clifford_1q_names) * np.random.rand(rb_depth)).astype(int)
     pulse_n_seq = []
     assert gate_char in clifford_1q_names
@@ -178,6 +220,21 @@ def interleaved_gate_sequence(rb_depth, gate_char: str, debug=False):
 
 
 def expand_full_sequence(pulse_name_seq, total_clifford):
+    """
+    Expand composite Clifford names to a flat list of primitive gate strings.
+
+    Parameters
+    ----------
+    pulse_name_seq : list of str
+        Clifford gate names, possibly composite (e.g. ``"X/2,Y"``).
+    total_clifford : str
+        Name of the inverting Clifford gate.
+
+    Returns
+    -------
+    final_sequence : list of str
+        Flat list of primitive gate names (e.g. ``["X/2", "Y", "-X/2", ...]``).
+    """
     full_sequence = []
     for name in pulse_name_seq:
         gates = name.split(",")
@@ -223,7 +280,10 @@ _GATE_TO_PULSE = {
 # ======================================================= #
 
 class TestRBProgram(BaseProgram):
+    """QICK program for TestRB: applies a legacy gate sequence then measures."""
+
     def _initialize(self, cfg):
+        """Set up resonator, qubit generator, and standard ge gates."""
         self.setup_resonator(cfg, prefix="ge")
         self.setup_qubit_gen(cfg, prefix="ge")
         self.setup_standard_gates(cfg, prefix="ge")
@@ -231,6 +291,7 @@ class TestRBProgram(BaseProgram):
             self.apply_cool(cfg)
 
     def _body(self, cfg):
+        """Apply optional cooling, unrolled legacy gate sequence, then measure."""
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
         if cfg.get("cooling", False):
             self.cooling_body(cfg)
@@ -255,12 +316,23 @@ class TestRBProgram(BaseProgram):
 
 class TestRB:
     """
-    Debug RB experiment using legacy clifford gate generation.
+    Debug RB experiment using legacy Clifford gate generation.
 
-    Instantiate with config only after BaseExperiment.setup() has been called.
+    Instantiate with config only after ``BaseExperiment.setup()`` has been called.
     """
 
     def __init__(self, config):
+        """
+        Parameters
+        ----------
+        config : dict
+            Experiment configuration dictionary.
+
+        Raises
+        ------
+        RuntimeError
+            If ``BaseExperiment.setup()`` has not been called first.
+        """
         from .base_experiment import BaseExperiment
         if BaseExperiment._soc is None:
             raise RuntimeError("Call BaseExperiment.setup(soc, soccfg, data_path) first.")
@@ -284,6 +356,8 @@ class TestRB:
         iq_process="abs",
     ):
         """
+        Acquire Standard RB or IRB data using the legacy gate generator.
+
         Parameters
         ----------
         py_avg : int
@@ -294,12 +368,19 @@ class TestRB:
             Step size between depths.
         number_sample : int
             Random sequences per depth point.
-        interleaved_gate : str or None
-            Gate name for IRB (must be in clifford_1q_names), or None for standard RB.
-        randomize_depth_order : bool
+        interleaved_gate : str or None, optional
+            Gate name for IRB (must be in ``clifford_1q_names``), or ``None``
+            for standard RB.
+        randomize_depth_order : bool, optional
             Measure depths in random order to average out time drift.
-        iq_process : "abs" | "real"
-            "real" after readout optimisation.
+        iq_process : str, optional
+            IQ processing mode: ``"abs"`` or ``"real"``.  Use ``"real"``
+            after readout optimisation.
+
+        Raises
+        ------
+        ValueError
+            If ``interleaved_gate`` is not in ``clifford_1q_names``.
         """
         self._iq_process = iq_process
         self._number_sample = number_sample
@@ -350,6 +431,38 @@ class TestRB:
         self.rb_result = rb_result
 
     def plot(self, label="TestRB", color="steelblue", ax=None, show_individual=False):
+        """
+        Fit and plot the RB decay curve.
+
+        Parameters
+        ----------
+        label : str, optional
+            Legend label for this curve.
+        color : str, optional
+            Line and marker colour.
+        ax : matplotlib.axes.Axes or None, optional
+            Axes to plot into.  A new figure is created when ``None``.
+        show_individual : bool, optional
+            Whether to show individual circuit samples as scatter points.
+
+        Returns
+        -------
+        epc : float
+            Error per Clifford.
+        epc_err : float
+            One-sigma uncertainty on EPC.
+        p_fit : float
+            Fitted decay parameter.
+        p_err : float
+            One-sigma uncertainty on the decay parameter.
+        pCov : ndarray
+            Covariance matrix from the fit.
+
+        Raises
+        ------
+        RuntimeError
+            If ``run()`` has not been called first.
+        """
         if self.x is None or self.rb_result is None:
             raise RuntimeError("Call run() first.")
 
@@ -390,6 +503,23 @@ class TestRB:
         return epc, epc_err, p_fit, p_err, pCov
 
     def saveLabber(self, qb_idx, config_all=None, yoko_value=None):
+        """
+        Save RB data to an HDF5/Labber file.
+
+        Parameters
+        ----------
+        qb_idx : int
+            Qubit index appended to the experiment name.
+        config_all : object or None, optional
+            Full config object with a ``to_yaml(q_id)`` method.
+        yoko_value : float or None, optional
+            Yokogawa flux bias value embedded in the filename.
+
+        Raises
+        ------
+        RuntimeError
+            If ``run()`` has not been called first.
+        """
         if self.x is None or self.rb_result is None:
             raise RuntimeError("Call run() first.")
 

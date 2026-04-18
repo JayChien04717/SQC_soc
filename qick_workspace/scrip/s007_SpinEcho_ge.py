@@ -11,7 +11,10 @@ from ..plotter.plot_utils import plot_final
 
 
 class SpinEchoProgram(BaseProgram):
+    """QICK program for Hahn spin echo: pi/2 — wait/2 — pi — wait/2 — pi/2."""
+
     def _initialize(self, cfg):
+        """Set up resonator, qubit generator, wait loop, and pi/2 / pi pulses."""
         self.setup_resonator(cfg)
         self.setup_qubit_gen(cfg, "ge")
         self.add_loop("waitloop", cfg["steps"])
@@ -26,6 +29,7 @@ class SpinEchoProgram(BaseProgram):
         )
 
     def _body(self, cfg):
+        """Apply optional cooling, Hahn echo sequence, then measure."""
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
         if cfg.get("cooling", False):
             self.apply_cool(cfg)
@@ -40,6 +44,14 @@ class SpinEchoProgram(BaseProgram):
 
 
 class SpinEcho(BaseExperiment):
+    """
+    Spin Echo (ge) experiment.
+
+    Hahn echo sequence sweeping the total inter-pulse delay.  Fits either a
+    decaying sinusoid (when ``ramsey_freq != 0``) or a pure exponential decay
+    (when ``ramsey_freq == 0``) to extract T2 Echo.
+    """
+
     EXPT_NAME = "s007_SpinEcho_ge"
     TAG = "Spin Echo"
     X_LABEL = "Times (us)"
@@ -50,6 +62,7 @@ class SpinEcho(BaseExperiment):
     X_SAVE_SCALE = 1.0
 
     def _create_program(self):
+        """Instantiate and return the SpinEchoProgram."""
         return SpinEchoProgram(
             self.soccfg,
             reps=self.cfg["reps"],
@@ -58,12 +71,31 @@ class SpinEcho(BaseExperiment):
         )
 
     def _extract_sweep_axis(self, prog):
+        """Return the total wait-time sweep axis (wait1 + wait2) in microseconds."""
         self.delay_times = prog.get_time_param(
             "wait1", "t", as_array=True
         ) + prog.get_time_param("wait2", "t", as_array=True)
         return self.delay_times
 
     def _post_fit(self, x_vals):
+        """
+        Fit and plot the Spin Echo decay.
+
+        When ``cfg["ramsey_freq"] != 0`` a decaying sinusoid is fit; otherwise
+        a pure exponential decay is fit.
+
+        Parameters
+        ----------
+        x_vals : ndarray
+            Total wait-time sweep axis in microseconds.
+
+        Returns
+        -------
+        fit_params : array
+            Best-fit parameters from the chosen model.
+        error : array
+            One-sigma parameter uncertainties.
+        """
         if self.cfg["ramsey_freq"] != 0:
             self.fit_params, error, fig = plot_final(
                 x_vals, self.iqdata, "Times (us)", fitdecaysin, decaysin
@@ -83,6 +115,7 @@ class SpinEcho(BaseExperiment):
         return self.fit_params, error
 
     def _save_comment(self, dict_val):
+        """Return a comment string including T2 Spin Echo."""
         if self.cfg["ramsey_freq"] != 0:
             return f"T2 Spin Echo = {self.fit_params[3]:.2f} us\n{dict_val}"
         else:

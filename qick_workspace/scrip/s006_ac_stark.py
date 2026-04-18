@@ -34,12 +34,14 @@ from ..plotter.plot_utils import plot_final
 class AcStarkProgram(BaseProgram):
     """
     Sweep the second pi/2 pulse phase phi over [0, 360) deg.
+
     The 2pi block uses gain = 2 * pi_gain_ge (the target pulse whose AC Stark
     shift we want to characterise).  Amplitude and envelope shape must
     match the operational gate exactly.
     """
 
     def _initialize(self, cfg):
+        """Set up resonator, qubit generator, and the three pulse types for AC Stark."""
         self.setup_resonator(cfg)
         self.setup_qubit_gen(cfg, "ge")
         self.add_loop("phaseloop", cfg["steps"])
@@ -69,6 +71,7 @@ class AcStarkProgram(BaseProgram):
         )
 
     def _body(self, cfg):
+        """Apply X_pi/2, then N X_2pi pulses, then swept-phase X_pi/2, then measure."""
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
 
         N = int(cfg.get("ac_stark_N", 1))
@@ -106,6 +109,7 @@ class AcStarkCalib(BaseExperiment):
     X_SAVE_SCALE = 1.0
 
     def _create_program(self):
+        """Instantiate and return the AcStarkProgram."""
         return AcStarkProgram(
             self.soccfg,
             reps=self.cfg["reps"],
@@ -114,10 +118,26 @@ class AcStarkCalib(BaseExperiment):
         )
 
     def _extract_sweep_axis(self, prog):
+        """Return the phase sweep axis in degrees."""
         self.phase_pts = prog.get_pulse_param("pi2_phi_pulse", "phase", as_array=True)
         return self.phase_pts
 
     def _post_fit(self, x_vals):
+        """
+        Fit a sinusoid to the phase-swept data and extract AC Stark phase error.
+
+        Parameters
+        ----------
+        x_vals : ndarray
+            Phase sweep axis in degrees.
+
+        Returns
+        -------
+        phase_err_per_2pi : float
+            AC Stark phase error in degrees per single 2pi pulse.
+        error : array
+            One-sigma parameter uncertainties from the sinusoid fit.
+        """
         self.fit_params, error, fig = plot_final(
             x_vals, self.iqdata, "Phase (deg)", fitsin, sinfunc
         )
@@ -141,14 +161,21 @@ class AcStarkCalib(BaseExperiment):
         Translate the measured phase error into a qubit frequency correction.
 
         A phase error delta (deg) accumulated over one 2pi pulse of duration
-        T_2pi (us) corresponds to a frequency offset:
+        T_2pi (us) corresponds to a frequency offset::
 
             df = delta / (360 * T_2pi)   [MHz]
 
         Returns
         -------
-        phase_err_per_2pi : float  — measured phase error in degrees
-        corrected_freq    : float  — suggested corrected qb_freq_ge in MHz
+        phase_err_per_2pi : float
+            Measured phase error in degrees per 2pi pulse.
+        corrected_freq : float
+            Suggested corrected ``qb_freq_ge`` in MHz.
+
+        Raises
+        ------
+        RuntimeError
+            If the experiment has not been run yet (``_post_fit`` not called).
         """
         if not hasattr(self, "_phase_err_per_2pi"):
             raise RuntimeError("Run the experiment first (call run() then _post_fit).")
@@ -183,6 +210,7 @@ class AcStarkCalib(BaseExperiment):
         return delta_deg, round(corrected_freq, 6)
 
     def _save_comment(self, dict_val):
+        """Return a comment string including AC Stark phase error."""
         N = int(self.cfg.get("ac_stark_N", 1))
         return (
             f"AC Stark phase error = {self._phase_err_per_2pi:.4f} deg/2pi  "

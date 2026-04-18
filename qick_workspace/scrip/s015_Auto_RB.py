@@ -38,14 +38,16 @@ from ..tools.fitting import fitrb, rb_func, rb_error, error_fit_err
 
 
 def _gate_fidelity(p_ref, p_irb, d=2):
-    """F_gate = 1 - (d-1)/d * (1 - p_irb/p_ref)"""
+    """Compute gate fidelity and EPC: F_gate = 1 - (d-1)/d * (1 - p_irb/p_ref)."""
     epc = (d - 1) / d * (1 - p_irb / p_ref)
     return 1 - epc, epc
 
 
 def _gate_fidelity_err(p_ref, p_irb, var_p_ref, var_p_irb, d=2):
     """
-    Error propagation for EPC = (d-1)/d * (1 - p_irb/p_ref).
+    Propagate uncertainty to EPC = (d-1)/d * (1 - p_irb/p_ref).
+
+    Uses first-order error propagation:
     dEPC/dp_ref  = (d-1)/d * p_irb / p_ref^2
     dEPC/dp_irb  = -(d-1)/d / p_ref
     """
@@ -67,11 +69,15 @@ class AutoRB:
 
     Parameters
     ----------
-    soc, soccfg, cfg : standard QICK objects / config dict
+    cfg : dict
+        Standard QICK experiment configuration dictionary.
 
-    After run():
-    ------------
-    self.results : dict
+    Notes
+    -----
+    After ``run()``, results are stored in ``self.results``:
+
+    .. code-block:: python
+
         {
             "ref": {
                 "p": float,          # decay parameter
@@ -109,6 +115,17 @@ class AutoRB:
     ]
 
     def __init__(self, cfg):
+        """
+        Parameters
+        ----------
+        cfg : dict
+            Experiment configuration dictionary.
+
+        Raises
+        ------
+        RuntimeError
+            If ``BaseExperiment.setup()`` has not been called first.
+        """
         from .base_experiment import BaseExperiment
         if BaseExperiment._soc is None:
             raise RuntimeError("Call BaseExperiment.setup(soc, soccfg, data_path) first.")
@@ -132,8 +149,30 @@ class AutoRB:
         randomize_depth_order=False,
     ):
         """
-        iq_process : "abs" | "real"
-            Use "real" after readout optimization (best SNR on I axis).
+        Run Standard RB followed by IRB for each requested gate.
+
+        Parameters
+        ----------
+        py_avg : int
+            Software averages per (depth, sample) point.
+        max_circuit_depth : int
+            Maximum Clifford depth (exclusive upper bound).
+        delta_clifford : int
+            Step size between circuit depths.
+        number_sample : int
+            Number of random circuit samples per depth point.
+        interleaved_gates : list of str or None, optional
+            Gate names for IRB (e.g. ``["X", "X/2"]``).  ``None`` runs
+            Standard RB only.
+        seed : int or None, optional
+            Random seed for reproducibility.
+        prefix : str, optional
+            Gate prefix (``"ge"`` or ``"ef"``).
+        iq_process : str, optional
+            IQ processing mode: ``"abs"`` or ``"real"``.  Use ``"real"``
+            after readout optimization for best SNR on the I axis.
+        randomize_depth_order : bool, optional
+            Measure circuit depths in random order to average out time drift.
         """
         self._iq_process = iq_process
         if interleaved_gates is None:
@@ -217,11 +256,26 @@ class AutoRB:
 
     def plot(self, title=None, show_individual=True, figsize=(7, 5)):
         """
-        Plot Reference RB + all IRB curves on one axes with annotation box.
+        Plot Reference RB and all IRB curves on one axes with annotation box.
+
+        Parameters
+        ----------
+        title : str or None, optional
+            Plot title.
+        show_individual : bool, optional
+            Whether to show individual circuit samples as scatter points.
+        figsize : tuple of float, optional
+            Figure size ``(width, height)`` in inches.
 
         Returns
         -------
-        fig, ax
+        fig : matplotlib.figure.Figure
+        ax : matplotlib.axes.Axes
+
+        Raises
+        ------
+        RuntimeError
+            If ``run()`` has not been called first.
         """
         if not self.results:
             raise RuntimeError("Must call run() before plot().")
@@ -295,7 +349,23 @@ class AutoRB:
     # ── Save ──────────────────────────────────────────────────────────────────
 
     def saveLabber(self, qb_idx, config_all=None, yoko_value=None):
-        """Save all RB / IRB datasets to Labber HDF5 files."""
+        """
+        Save all RB and IRB datasets to Labber HDF5 files.
+
+        Parameters
+        ----------
+        qb_idx : int
+            Qubit index appended to each experiment name.
+        config_all : object or None, optional
+            Full config object with a ``to_yaml(q_id)`` method.
+        yoko_value : float or None, optional
+            Yokogawa flux bias value embedded in the filename.
+
+        Raises
+        ------
+        RuntimeError
+            If ``run()`` has not been called first.
+        """
         if not self.results:
             raise RuntimeError("Must call run() before saveLabber().")
 
@@ -319,7 +389,15 @@ class AutoRB:
     # ── Summary ───────────────────────────────────────────────────────────────
 
     def summary(self):
-        """Return a formatted string summary of all results."""
+        """
+        Return a formatted string summary of all RB and IRB results.
+
+        Returns
+        -------
+        summary : str
+            Multi-line text summary of decay parameters, EPC, and gate
+            fidelities for the reference and all interleaved gates.
+        """
         if not self.results:
             return "No results yet. Call run() first."
 
@@ -349,7 +427,7 @@ class AutoRB:
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     def _fit_rb(self, rb_obj):
-        """Fit a RandomizedBenchmarking object and return result dict."""
+        """Fit a RandomizedBenchmarking object and return a result dictionary."""
         _proc = np.real if getattr(self, "_iq_process", "abs") == "real" else np.abs
         raw = np.array(rb_obj.rb_result)
         amp = _proc(raw)
@@ -376,7 +454,7 @@ class AutoRB:
         }
 
     def _plot_one(self, ax, key, label, color, marker, show_individual):
-        """Plot one RB/IRB curve onto ax."""
+        """Plot one RB or IRB decay curve onto the given axes."""
         _proc = np.real if getattr(self, "_iq_process", "abs") == "real" else np.abs
         res = self.results[key]
         x = res["x"]

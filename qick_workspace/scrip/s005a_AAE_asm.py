@@ -1,21 +1,24 @@
 """
 s005a_AAE_asm — Power Rabi (ge) with ASMv2 hardware iteration loop
 ===================================================================
-與 s005a_AAE.py 功能完全相同，但把 Python for 迴圈改成 ASMv2
-open_loop / close_loop，讓重複次數在硬體計數器中執行，
-不會隨 cfg["iteration"] 增大而膨脹程式記憶體。
+Same functionality as s005a_AAE.py, but replaces the Python ``for`` loop
+with ASMv2 ``open_loop`` / ``close_loop`` so that the repetition count
+is driven by a hardware counter instead of being unrolled into program
+memory at compile time.
 
-ASMv2 重點變更：
-    _body() 中的
-        for _ in range(cfg["iteration"]):      ← Python 展開（compile-time）
+ASMv2 key change:
+    _body() replaces::
+
+        for _ in range(cfg["iteration"]):      # Python compile-time unroll
             self.pulse(...)
             self.delay_auto(...)
 
-    改為：
-        self.open_loop(cfg["iteration"], name="iter_loop")   ← 硬體計數器開始
+    with::
+
+        self.open_loop(cfg["iteration"], name="iter_loop")   # hardware counter start
             self.pulse(...)
             self.delay_auto(...)
-        self.close_loop()                                    ← 硬體計數器結束
+        self.close_loop()                                    # hardware counter end
 """
 
 import numpy as np
@@ -32,14 +35,18 @@ from ..plotter.plot_utils import plot_final
 
 
 class PowerRabiAsmProgram(BaseProgram):
+    """QICK program for AAE power Rabi using an ASMv2 hardware iteration loop."""
+
     def _initialize(self, cfg):
+        """Set up resonator, qubit generator, gain-sweep loop, and qubit pulse."""
         self.setup_resonator(cfg)
         self.setup_qubit_gen(cfg, "ge")
-        # add_loop：建立 ASMv2 sweep loop，gainloop 對應 qb_gain 的掃描軸
+        # add_loop: create ASMv2 sweep loop; gainloop maps to the qb_gain sweep axis
         self.add_loop("gainloop", cfg["steps"])
         self.setup_qb_pulse(cfg, "ge", name="qb_pulse")
 
     def _body(self, cfg):
+        """Apply optional cooling, run the ASMv2 hardware iteration loop, then measure."""
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
 
         if cfg.get("cooling", False):
@@ -47,27 +54,38 @@ class PowerRabiAsmProgram(BaseProgram):
             self.cooling_body(cfg)
 
         # ── ASMv2 hardware loop ──────────────────────────────────────────
-        # open_loop(n, name) 做三件事：
-        #   1. 分配一個具名 tProc 暫存器（例如 "iter_loop"）
-        #   2. 將暫存器初始化為 0
-        #   3. 寫入 label（讓 close_loop 知道要跳回哪裡）
+        # open_loop(n, name) does three things:
+        #   1. Allocates a named tProc register (e.g. "iter_loop")
+        #   2. Initialises the register to 0
+        #   3. Writes a label (so close_loop knows where to jump back)
         self.open_loop(cfg["iteration"], name="iter_loop")
 
-        # loop body：與原本完全相同，只是現在由硬體計數器控制重複
+        # Loop body: identical to the original; now controlled by hardware counter
         self.pulse(ch=cfg["qb_ch"], name="qb_pulse", t=0)
         self.delay_auto(t=0.02)
 
-        # close_loop() 做兩件事：
-        #   1. 將暫存器 +1
-        #   2. 若暫存器 < n，JUMP 回 open_loop 的 label
+        # close_loop() does two things:
+        #   1. Increments the register by 1
+        #   2. If register < n, JUMPs back to open_loop's label
         self.close_loop()
-        # ── ASMv2 hardware loop 結束 ─────────────────────────────────────
+        # ── ASMv2 hardware loop end ──────────────────────────────────────
 
         self.delay_auto(t=0.05, tag="waiting")
         self.measure(cfg)
 
 
 class PowerRabiAsmChevron(BaseExperiment):
+    """
+    AAE Power Rabi Chevron experiment (ASMv2 hardware iteration loop).
+
+    Performs a 2D scan: inner loop sweeps gain (hardware), outer loop sweeps
+    iteration count (software).  The iteration body is executed by an ASMv2
+    hardware counter so program memory does not grow with iteration depth.
+
+    Summing all iteration rows and fitting a sinc^2 model to the summed trace
+    locates the optimal pi gain.
+    """
+
     EXPT_NAME = "s005a_power_rabi_asm_chevron"
     TAG = "Rabi"
     X_LABEL = "Dac Gain (a.u)"
@@ -84,6 +102,16 @@ class PowerRabiAsmChevron(BaseExperiment):
     # ── helpers ──────────────────────────────────────────────────────────────
 
     def _build_scan_axes(self):
+        """
+        Build and return the gain and iteration sweep axes from config.
+
+        Returns
+        -------
+        gains : ndarray
+            DAC gain sweep values.
+        iters : ndarray of int
+            Iteration count sweep values.
+        """
         cfg = self.cfg
         prog = self._create_program()
         gains = self._extract_sweep_axis(prog)
@@ -104,9 +132,27 @@ class PowerRabiAsmChevron(BaseExperiment):
 
     def run(self, py_avg, show_final_plot=False, **kwargs):
         """
-        Mixed 2D parameter scan:
-        - Inner loop: Hardware sweep over gain (handled by PowerRabiAsmProgram).
-        - Outer loop: Software sweep over iterations.
+        Run the mixed 2D parameter scan with a live colour-mesh display.
+
+        The inner loop is a hardware sweep over gain (handled by
+        ``PowerRabiAsmProgram``).  The outer loop is a software sweep over
+        the iteration count.  ``cfg["iteration"]`` must be a plain ``int``
+        because ``open_loop`` reads it at compile time and writes it into the
+        hardware counter.
+
+        Parameters
+        ----------
+        py_avg : int
+            Hardware averages (rounds) per gain point.
+        show_final_plot : bool, optional
+            Reserved for compatibility; unused in this override.
+        **kwargs
+            Additional keyword arguments (ignored).
+
+        Returns
+        -------
+        optimal_gain : float
+            Estimated optimal pi gain from the sinc^2 fit.
         """
         gains, iters = self._build_scan_axes()
         self._sweep_vals_x = gains
@@ -130,8 +176,8 @@ class PowerRabiAsmChevron(BaseExperiment):
             for y_idx, iter_val in enumerate(
                 tqdm(iters, desc="Outer Sweep: Iterations")
             ):
-                # cfg["iteration"] 必須是 int（不可為 QickParam），
-                # open_loop 在 compile 時讀取這個值寫入硬體計數器
+                # cfg["iteration"] must be int (not QickParam);
+                # open_loop reads this value at compile time to initialise the hardware counter
                 self.cfg["iteration"] = int(iter_val)
                 prog = self._create_program()
 
@@ -168,6 +214,7 @@ class PowerRabiAsmChevron(BaseExperiment):
     # ── _create_program / _extract_sweep_axis ────────────────────────────────
 
     def _create_program(self):
+        """Instantiate and return the PowerRabiAsmProgram."""
         self.cfg.setdefault("iteration", self.cfg.get("iter_start", 1))
         return PowerRabiAsmProgram(
             self.soccfg,
@@ -177,17 +224,37 @@ class PowerRabiAsmChevron(BaseExperiment):
         )
 
     def _extract_sweep_axis(self, prog):
+        """Return the gain sweep axis."""
         return prog.get_pulse_param("qb_pulse", "gain", as_array=True)
 
     def _extract_sweep_axis_y(self, prog):
+        """Return the iteration sweep axis."""
         return self._sweep_vals_y
 
     # ── analysis ─────────────────────────────────────────────────────────────
 
     def analyze_and_plot(self):
+        """Backward-compatible alias for ``_post_fit()``."""
         return self._post_fit()
 
     def _post_fit(self, x_vals=None):
+        """
+        Fit a sinc^2 model to the iteration-summed Rabi trace.
+
+        Sums amplitude over all iteration rows, applies Gaussian smoothing,
+        estimates the Rabi frequency via FFT, then fits a sinc^2 model to
+        locate the optimal pi gain.
+
+        Parameters
+        ----------
+        x_vals : ndarray or None, optional
+            Unused; retained for BaseExperiment interface compatibility.
+
+        Returns
+        -------
+        optimal_gain : float
+            Estimated optimal pi gain.
+        """
         if self.iqdata is None:
             print("No data. Call run() first.")
             return None
@@ -216,6 +283,7 @@ class PowerRabiAsmChevron(BaseExperiment):
             x0_guess = gains[idx_min]
             sign_guess = -1.0
 
+        # np.sinc(x) = sin(pi*x)/(pi*x); pass (g - g0)/width
         def sinc2_model(x, A, x0, width, offset):
             return A * np.sinc((x - x0) / width) ** 2 + offset
 
@@ -292,6 +360,7 @@ class PowerRabiAsmChevron(BaseExperiment):
         return optimal_gain
 
     def _save_comment(self, dict_val):
+        """Return a comment string including the optimal gain if available."""
         if self.fit_params:
             g = self.fit_params.get("optimal_gain", "N/A")
             return f"AAE Power Rabi (ASMv2 loop)\nOptimal gain = {g}\n{dict_val}"

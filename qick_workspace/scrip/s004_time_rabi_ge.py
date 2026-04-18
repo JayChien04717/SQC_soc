@@ -11,7 +11,10 @@ from ..plotter.plot_utils import plot_final
 
 
 class TimeRabiProgram(BaseProgram):
+    """QICK program for time Rabi: sweeps flat-top pulse length."""
+
     def _initialize(self, cfg):
+        """Set up resonator, qubit generator, and length-swept flat-top pulse."""
         self.setup_resonator(cfg)
         self.setup_qubit_gen(cfg, "ge")
         self.add_loop("lenloop", cfg["steps"])
@@ -23,6 +26,7 @@ class TimeRabiProgram(BaseProgram):
         )
 
     def _body(self, cfg):
+        """Apply optional cooling, send qubit pulse, then measure."""
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
         if cfg.get("cooling", False):
             self.apply_cool(cfg)
@@ -33,6 +37,13 @@ class TimeRabiProgram(BaseProgram):
 
 
 class TimeRabi(BaseExperiment):
+    """
+    Time Rabi (ge) experiment.
+
+    Sweeps the flat-top qubit pulse length and fits a decaying sinusoid to
+    extract the pi and pi/2 pulse lengths.
+    """
+
     EXPT_NAME = "s004_time_rabi_ge"
     TAG = "Rabi"
     X_LABEL = "Pulse Length (us)"
@@ -43,6 +54,7 @@ class TimeRabi(BaseExperiment):
     X_SAVE_SCALE = 1.0
 
     def _create_program(self):
+        """Instantiate and return the TimeRabiProgram."""
         return TimeRabiProgram(
             self.soccfg,
             reps=self.cfg["reps"],
@@ -51,9 +63,25 @@ class TimeRabi(BaseExperiment):
         )
 
     def _extract_sweep_axis(self, prog):
+        """Return the pulse length sweep axis in microseconds."""
         return prog.get_pulse_param("qb_pulse", "length", as_array=True)
 
     def _post_fit(self, x_vals):
+        """
+        Fit a decaying sinusoid and return the pi and pi/2 pulse lengths.
+
+        Parameters
+        ----------
+        x_vals : ndarray
+            Pulse length axis in microseconds.
+
+        Returns
+        -------
+        pi_len : float
+            Pi pulse length in microseconds.
+        pi2_len : float
+            Pi/2 pulse length in microseconds.
+        """
         self.fit_params, error, fig, ax = plot_final(
             x_vals,
             self.iqdata,

@@ -20,12 +20,16 @@ from .base_experiment import BaseExperiment
 
 
 class LoopbackProgram(BaseProgram):
+    """QICK loopback program for time-of-flight measurement."""
+
     def _initialize(self, cfg):
+        """Set up resonator and optional qubit pulses."""
         self.setup_resonator(cfg, prefix="ge")
         self.setup_qb_pulse(cfg, "ge", name="qb_pulse", gain_key="pi_gain_ge")
         self.setup_qb_pulse(cfg, "ef", name="qb_pulse_ef", gain_key="pi_gain_ef")
 
     def _body(self, cfg):
+        """Fire resonator pulse with optional qubit pre-rotation."""
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
         if cfg.get("cheek_e", False):
             self.pulse(ch=cfg["qb_ch"], name="qb_pulse", t=0)
@@ -56,11 +60,18 @@ class TOF(BaseExperiment):
     X_SAVE_SCALE = 1e-6  # μs → s
 
     def __init__(self, config):
+        """
+        Parameters
+        ----------
+        config : dict
+            Experiment configuration dict.
+        """
         super().__init__(config)
         self.iq_list = None
         self.t = None  # time axis (μs)
 
     def _create_program(self):
+        """Instantiate and return the LoopbackProgram."""
         return LoopbackProgram(
             self.soccfg,
             reps=1,
@@ -69,15 +80,35 @@ class TOF(BaseExperiment):
         )
 
     def _extract_sweep_axis(self, prog):
+        """Return the time axis in microseconds."""
         return prog.get_time_axis(ro_index=0)
 
     # ── Override run: acquire_decimated with custom liveplot ──
 
     def run(self, py_avg=1):
-        """Override: uses acquire_decimated instead of standard sweep."""
+        """
+        Acquire decimated time-domain data and display a live plot.
+
+        Parameters
+        ----------
+        py_avg : int, optional
+            Number of software averages.
+        """
         return self.liveplot(py_avg=py_avg)
 
     def liveplot(self, py_avg=1, threshold=1.5):
+        """
+        Run acquire_decimated with a live updating plot, then show the final
+        result with the estimated trigger time.
+
+        Parameters
+        ----------
+        py_avg : int, optional
+            Number of software averages.
+        threshold : float, optional
+            Threshold multiplier relative to the mean amplitude used to
+            detect the time-of-flight crossing.
+        """
         prog = self._create_program()
         self.t = self._extract_sweep_axis(prog)
         self._sweep_vals_x = self.t  # for BaseExperiment.saveLabber
@@ -140,9 +171,16 @@ class TOF(BaseExperiment):
             display(final_fig)
             plt.close(final_fig)
         plt.close(fig)
-        # return self.iqdata, not interrupted, i + 1
 
     def plot(self, threshold=1.5):
+        """
+        Plot the last acquired decimated waveform with trigger marker.
+
+        Parameters
+        ----------
+        threshold : float, optional
+            Threshold multiplier relative to the mean amplitude for TOF detection.
+        """
         if self.iq_list is None:
             print("No data to plot. Run the experiment first.")
             return
