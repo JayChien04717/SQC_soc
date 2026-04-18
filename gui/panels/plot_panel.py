@@ -1,0 +1,96 @@
+import numpy as np
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QLabel, QCheckBox
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+
+
+class PlotPanel(QWidget):
+    """[3] Live matplotlib canvas with IQ-mode selector."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._x = None
+        self._iq = None
+        self._build_ui()
+
+    # ── UI ────────────────────────────────────────────────────────────────────
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(2, 2, 2, 2)
+
+        # Controls bar
+        ctrl = QHBoxLayout()
+        ctrl.addWidget(QLabel("IQ:"))
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItems(["mag", "phase", "avgi", "avgq"])
+        self.mode_combo.currentTextChanged.connect(self._replot)
+        ctrl.addWidget(self.mode_combo)
+        self.autoscale_cb = QCheckBox("Autoscale")
+        self.autoscale_cb.setChecked(True)
+        ctrl.addWidget(self.autoscale_cb)
+        ctrl.addStretch()
+        root.addLayout(ctrl)
+
+        # Matplotlib canvas
+        self.fig = Figure(figsize=(5, 3), tight_layout=True)
+        self.ax  = self.fig.add_subplot(111)
+        self.canvas = FigureCanvas(self.fig)
+        root.addWidget(self.canvas)
+
+    # ── Public API ────────────────────────────────────────────────────────────
+
+    def update_data(self, x, iq, xlabel="x", title=""):
+        """Refresh the plot with new IQ data array."""
+        self._x      = np.asarray(x)
+        self._iq     = np.asarray(iq)
+        self._xlabel = xlabel
+        self._title  = title
+        self._replot()
+
+    def clear(self):
+        self._x = self._iq = None
+        self.ax.cla()
+        self.canvas.draw_idle()
+
+    # ── Internal ──────────────────────────────────────────────────────────────
+
+    def _replot(self):
+        if self._x is None or self._iq is None:
+            return
+
+        mode = self.mode_combo.currentText()
+        if mode == "mag":
+            y = np.abs(self._iq)
+            ylabel = "|IQ| (ADC)"
+        elif mode == "phase":
+            y = np.degrees(np.angle(self._iq))
+            ylabel = "Phase (deg)"
+        elif mode == "avgi":
+            y = np.real(self._iq)
+            ylabel = "I (ADC)"
+        else:
+            y = np.imag(self._iq)
+            ylabel = "Q (ADC)"
+
+        self.ax.cla()
+        if y.ndim == 1:
+            self.ax.plot(self._x, y, ".-", markersize=3)
+        else:
+            # 2D: colormap
+            self.ax.imshow(
+                y, aspect="auto",
+                extent=[self._x[0], self._x[-1], 0, y.shape[0]],
+                origin="lower",
+            )
+
+        self.ax.set_xlabel(getattr(self, "_xlabel", ""))
+        self.ax.set_ylabel(ylabel)
+        if getattr(self, "_title", ""):
+            self.ax.set_title(self._title, fontsize=9)
+
+        if self.autoscale_cb.isChecked():
+            self.ax.relim()
+            self.ax.autoscale_view()
+
+        self.canvas.draw_idle()
