@@ -1,9 +1,41 @@
+import socket
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
     QLabel, QLineEdit, QPushButton, QRadioButton,
-    QButtonGroup, QDoubleSpinBox, QFileDialog,
+    QButtonGroup, QDoubleSpinBox, QFileDialog, QMessageBox,
 )
-from PySide6.QtCore import Signal, QTimer
+from PySide6.QtCore import Signal, QThread
+
+# Ports tried in order — first one that accepts a TCP connection wins
+_PROBE_PORTS = [8888, 22, 80]
+_TIMEOUT_S   = 3
+
+
+class _ConnectWorker(QThread):
+    """Try opening a TCP socket to the host; emit success or failure."""
+
+    succeeded = Signal()
+    failed    = Signal(str)
+
+    def __init__(self, host: str, parent=None):
+        super().__init__(parent)
+        self.host = host
+
+    def run(self):
+        for port in _PROBE_PORTS:
+            try:
+                s = socket.create_connection((self.host, port),
+                                             timeout=_TIMEOUT_S)
+                s.close()
+                self.succeeded.emit()
+                return
+            except OSError:
+                continue
+        self.failed.emit(
+            f"Could not reach {self.host} on ports {_PROBE_PORTS}.\n"
+            "Check the IP address and that the board is powered on."
+        )
 
 
 class SetupPanel(QWidget):
@@ -16,6 +48,7 @@ class SetupPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._connected = False
+        self._worker: _ConnectWorker | None = None
         self._build_ui()
 
     def _build_ui(self):
@@ -42,9 +75,9 @@ class SetupPanel(QWidget):
         lay.addLayout(row)
 
         self.connect_btn = QPushButton("Connect")
-        self.connect_btn.setCheckable(True)
-        self.connect_btn.setToolTip("Connect / disconnect from the SoC  (Ctrl+Shift+C)")
-        self.connect_btn.clicked.connect(self._on_connect)
+        self.connect_btn.setCheckable(False)          # managed manually
+        self.connect_btn.setToolTip("Connect / disconnect from the SoC")
+        self.connect_btn.clicked.connect(self._on_connect_clicked)
         lay.addWidget(self.connect_btn)
 
         led_row = QHBoxLayout()
@@ -57,28 +90,49 @@ class SetupPanel(QWidget):
         lay.addLayout(led_row)
         return grp
 
-    def _on_connect(self, checked: bool):
-        # Briefly show "Connecting…" before toggling state
-        if checked:
-            self.connect_btn.setEnabled(False)
-            self.connect_btn.setText("Connecting…")
-            self._led.setStyleSheet("color: #f0883e; font-size: 16px;")
-            self._status_lbl.setText("Connecting…")
-            QTimer.singleShot(600, self._finish_connect)
-        else:
+    def _on_connect_clicked(self):
+        if self._connected:
+            # Disconnect
             self._connected = False
             self.connect_btn.setText("Connect")
-            self._led.setStyleSheet("color: #f0883e; font-size: 16px;")
-            self._status_lbl.setText("Disconnected")
+            self._set_led(False, "Disconnected")
             self.connection_changed.emit(False)
+        else:
+            # Start probing
+            host = self.ip_edit.text().strip()
+            if not host:
+                QMessageBox.warning(self, "No IP", "Please enter the SOC IP address.")
+                return
+            self.connect_btn.setEnabled(False)
+            self.connect_btn.setText("Connecting…")
+            self._set_led(None, f"Probing {host}…")
 
-    def _finish_connect(self):
+            self._worker = _ConnectWorker(host, self)
+            self._worker.succeeded.connect(self._on_probe_success)
+            self._worker.failed.connect(self._on_probe_failure)
+            self._worker.start()
+
+    def _on_probe_success(self):
         self._connected = True
         self.connect_btn.setEnabled(True)
         self.connect_btn.setText("Disconnect")
-        self._led.setStyleSheet("color: #7ee787; font-size: 16px;")
-        self._status_lbl.setText("Connected")
+        self._set_led(True, "Connected")
         self.connection_changed.emit(True)
+
+    def _on_probe_failure(self, msg: str):
+        self._connected = False
+        self.connect_btn.setEnabled(True)
+        self.connect_btn.setText("Connect")
+        self._set_led(False, "Unreachable")
+        QMessageBox.warning(self, "Connection failed", msg)
+        self.connection_changed.emit(False)
+
+    def _set_led(self, state, text: str):
+        """state: True=green, False=orange, None=yellow (probing)."""
+        colors = {True: "#7ee787", False: "#f0883e", None: "#f0d050"}
+        self._led.setStyleSheet(
+            f"color: {colors[state]}; font-size: 16px;")
+        self._status_lbl.setText(text)
 
     # ── Config ────────────────────────────────────────────────────────────────
 
@@ -123,7 +177,8 @@ class SetupPanel(QWidget):
 
     def _browse_config(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Select Config", "", "YAML files (*.yaml *.yml);;All files (*)")
+            self, "Select Config", "",
+            "YAML files (*.yaml *.yml);;All files (*)")
         if path:
             self.config_path.setText(path)
 
