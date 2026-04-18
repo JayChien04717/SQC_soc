@@ -151,6 +151,7 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self):
         self.setup_panel.connection_changed.connect(self._on_connection)
+        self.setup_panel.soc_ready.connect(self._on_soc_ready)
         self.setup_panel.qubit_changed.connect(self._on_qubit)
         self.setup_panel.config_loaded.connect(self._on_config)
         self.expt_panel.run_requested.connect(self._on_run)
@@ -168,6 +169,21 @@ class MainWindow(QMainWindow):
             self._led.setStyleSheet("color: #f0883e; font-size: 14px;")
             self._lbl_conn.setText("Disconnected")
             self.log("Disconnected.", "warn")
+
+    def _on_soc_ready(self, soc, soccfg):
+        """Call BaseExperiment.setup() once soc/soccfg are available."""
+        # Log board info (same as print(soccfg) in the notebook)
+        board_info = str(soccfg).strip()
+        for line in board_info.splitlines()[:6]:   # first 6 lines is enough
+            self.log(line, "info")
+
+        data_path = self.setup_panel.data_folder or "data"
+        try:
+            from qick_workspace.scrip.base_experiment import BaseExperiment
+            BaseExperiment.setup(soc, soccfg, data_path)
+            self.log(f"BaseExperiment ready  —  data path: {data_path}", "success")
+        except Exception as exc:
+            self.log(f"BaseExperiment.setup() failed: {exc}", "error")
 
     def _on_qubit(self, qidx: int):
         self._lbl_qubit.setText(f"Q{qidx}")

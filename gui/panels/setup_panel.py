@@ -1,47 +1,45 @@
-import socket
-
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
     QLabel, QLineEdit, QPushButton, QRadioButton,
-    QButtonGroup, QDoubleSpinBox, QFileDialog, QMessageBox,
+    QButtonGroup, QDoubleSpinBox, QFileDialog,
+    QSpinBox, QMessageBox,
 )
 from PySide6.QtCore import Signal, QThread
 
-# Ports tried in order — first one that accepts a TCP connection wins
-_PROBE_PORTS = [8888, 22, 80]
-_TIMEOUT_S   = 3
-
 
 class _ConnectWorker(QThread):
-    """Try opening a TCP socket to the host; emit success or failure."""
+    """Call make_proxy in a background thread; emit soc+soccfg or an error."""
 
-    succeeded = Signal()
+    succeeded = Signal(object, object)   # soc, soccfg
     failed    = Signal(str)
 
-    def __init__(self, host: str, parent=None):
+    def __init__(self, ns_host: str, ns_port: int, proxy_name: str, parent=None):
         super().__init__(parent)
-        self.host = host
+        self.ns_host    = ns_host
+        self.ns_port    = ns_port
+        self.proxy_name = proxy_name
 
     def run(self):
-        for port in _PROBE_PORTS:
-            try:
-                s = socket.create_connection((self.host, port),
-                                             timeout=_TIMEOUT_S)
-                s.close()
-                self.succeeded.emit()
-                return
-            except OSError:
-                continue
-        self.failed.emit(
-            f"Could not reach {self.host} on ports {_PROBE_PORTS}.\n"
-            "Check the IP address and that the board is powered on."
-        )
+        try:
+            import Pyro4
+            from qick.pyro import make_proxy
+            Pyro4.config.SERIALIZER = "pickle"
+            Pyro4.config.PICKLE_PROTOCOL_VERSION = 4
+            soc, soccfg = make_proxy(
+                ns_host=self.ns_host,
+                ns_port=self.ns_port,
+                proxy_name=self.proxy_name,
+            )
+            self.succeeded.emit(soc, soccfg)
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 class SetupPanel(QWidget):
-    """[1] Connection, config file, and qubit selector."""
+    """[1] Pyro connection, config file, and qubit selector."""
 
     connection_changed = Signal(bool)
+    soc_ready          = Signal(object, object)   # soc, soccfg
     qubit_changed      = Signal(int)
     config_loaded      = Signal(str)
 
@@ -49,6 +47,8 @@ class SetupPanel(QWidget):
         super().__init__(parent)
         self._connected = False
         self._worker: _ConnectWorker | None = None
+        self.soc     = None
+        self.soccfg  = None
         self._build_ui()
 
     def _build_ui(self):
@@ -67,16 +67,32 @@ class SetupPanel(QWidget):
         lay = QVBoxLayout(grp)
         lay.setSpacing(6)
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("SOC IP:"))
-        self.ip_edit = QLineEdit("192.168.1.1")
-        self.ip_edit.setToolTip("IP address of the QICK SoC board")
-        row.addWidget(self.ip_edit)
-        lay.addLayout(row)
+        # ns_host
+        row1 = QHBoxLayout()
+        row1.addWidget(QLabel("NS host:"))
+        self.ip_edit = QLineEdit("192.168.10.82")
+        self.ip_edit.setToolTip("Pyro4 nameserver host (ns_host)")
+        row1.addWidget(self.ip_edit)
+        lay.addLayout(row1)
+
+        # ns_port + proxy_name on same row
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("Port:"))
+        self.port_spin = QSpinBox()
+        self.port_spin.setRange(1, 65535)
+        self.port_spin.setValue(8888)
+        self.port_spin.setFixedWidth(70)
+        self.port_spin.setToolTip("Pyro4 nameserver port (ns_port)")
+        row2.addWidget(self.port_spin)
+        row2.addSpacing(8)
+        row2.addWidget(QLabel("Name:"))
+        self.proxy_edit = QLineEdit("myqick")
+        self.proxy_edit.setToolTip("Pyro4 proxy name (proxy_name)")
+        row2.addWidget(self.proxy_edit)
+        lay.addLayout(row2)
 
         self.connect_btn = QPushButton("Connect")
-        self.connect_btn.setCheckable(False)          # managed manually
-        self.connect_btn.setToolTip("Connect / disconnect from the SoC")
+        self.connect_btn.setToolTip("Connect via Pyro4 make_proxy")
         self.connect_btn.clicked.connect(self._on_connect_clicked)
         lay.addWidget(self.connect_btn)
 
@@ -92,46 +108,51 @@ class SetupPanel(QWidget):
 
     def _on_connect_clicked(self):
         if self._connected:
-            # Disconnect
             self._connected = False
+            self.soc = self.soccfg = None
             self.connect_btn.setText("Connect")
             self._set_led(False, "Disconnected")
             self.connection_changed.emit(False)
-        else:
-            # Start probing
-            host = self.ip_edit.text().strip()
-            if not host:
-                QMessageBox.warning(self, "No IP", "Please enter the SOC IP address.")
-                return
-            self.connect_btn.setEnabled(False)
-            self.connect_btn.setText("Connecting…")
-            self._set_led(None, f"Probing {host}…")
+            return
 
-            self._worker = _ConnectWorker(host, self)
-            self._worker.succeeded.connect(self._on_probe_success)
-            self._worker.failed.connect(self._on_probe_failure)
-            self._worker.start()
+        ns_host    = self.ip_edit.text().strip()
+        ns_port    = self.port_spin.value()
+        proxy_name = self.proxy_edit.text().strip()
+        if not ns_host or not proxy_name:
+            QMessageBox.warning(self, "Missing fields",
+                                "Please fill in NS host and proxy name.")
+            return
 
-    def _on_probe_success(self):
-        self._connected = True
+        self.connect_btn.setEnabled(False)
+        self.connect_btn.setText("Connecting…")
+        self._set_led(None, f"Connecting to {ns_host}:{ns_port}…")
+
+        self._worker = _ConnectWorker(ns_host, ns_port, proxy_name, self)
+        self._worker.succeeded.connect(self._on_success)
+        self._worker.failed.connect(self._on_failure)
+        self._worker.start()
+
+    def _on_success(self, soc, soccfg):
+        self._connected  = True
+        self.soc         = soc
+        self.soccfg      = soccfg
         self.connect_btn.setEnabled(True)
         self.connect_btn.setText("Disconnect")
         self._set_led(True, "Connected")
         self.connection_changed.emit(True)
+        self.soc_ready.emit(soc, soccfg)
 
-    def _on_probe_failure(self, msg: str):
+    def _on_failure(self, msg: str):
         self._connected = False
         self.connect_btn.setEnabled(True)
         self.connect_btn.setText("Connect")
-        self._set_led(False, "Unreachable")
-        QMessageBox.warning(self, "Connection failed", msg)
+        self._set_led(False, "Failed")
+        QMessageBox.critical(self, "Connection failed", msg)
         self.connection_changed.emit(False)
 
     def _set_led(self, state, text: str):
-        """state: True=green, False=orange, None=yellow (probing)."""
         colors = {True: "#7ee787", False: "#f0883e", None: "#f0d050"}
-        self._led.setStyleSheet(
-            f"color: {colors[state]}; font-size: 16px;")
+        self._led.setStyleSheet(f"color: {colors[state]}; font-size: 16px;")
         self._status_lbl.setText(text)
 
     # ── Config ────────────────────────────────────────────────────────────────
