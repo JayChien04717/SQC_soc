@@ -2,7 +2,7 @@
 s015_RB_asm — Randomized Benchmarking with ASMv2 gate-dispatch loop
 ====================================================================
 與 s015_Single_qubit_RB.py 功能完全相同，但把 Python for 迴圈改成
-ASMv2 register-based gate dispatch。
+ASMv2 open_loop + register-based gate dispatch。
 
 架構差異
 --------
@@ -11,13 +11,11 @@ ASMv2 register-based gate dispatch。
         self.pulse(name=gate_pulse, t=0)
 
 本版（ASMv2 dispatch）：
-    _initialize()  →  add_reg("gate_idx"), add_reg("gate_code")
-    compile_datamem() →  gate_seq 編碼為整數寫入 dmem（不消耗 pmem）
+    _initialize()  →  add_reg("gate_code")   ← gate_idx 由 open_loop 自動分配
+    compile_datamem() →  gate_seq 編碼為整數寫入 dmem（不消耗 pmem，無 sentinel）
     _body() 中：
-        write_reg gate_idx = 0
-        LABEL dispatch_loop:
+        open_loop(N, "gate_idx")         ← 硬體迴圈，gate_idx 自動從 0 遞增到 N-1
             read_dmem gate_code ← gate_idx          ← 間接定址
-            cond_jump seq_done  if gate_code == END  ← sentinel 偵測
             cond_jump GATE_I    if gate_code == 0    ← 線性分派
             cond_jump GATE_X    if gate_code == 1
             ...
@@ -27,10 +25,8 @@ ASMv2 register-based gate dispatch。
             jump POST_GATE
         ...
         LABEL POST_GATE:
-            inc_reg gate_idx
-            jump dispatch_loop
-        LABEL seq_done:
-            measure
+        close_loop()                     ← inc gate_idx，若未完成則跳回 open_loop 標籤
+        measure
 
 為何用 delay() 而非 delay_auto()
 ---------------------------------
@@ -64,7 +60,7 @@ from ..tools.system_tool import hdf5_generator, get_next_filename_labber, config
 from ..tools.fitting import fitrb, rb_func, rb_error, error_fit_err
 
 # ── Gate code encoding ──────────────────────────────────────────────────────
-# I=0, X=1, Y=2, X/2=3, -X/2=4, Y/2=5, -Y/2=6, END=7
+# I=0, X=1, Y=2, X/2=3, -X/2=4, Y/2=5, -Y/2=6
 
 _GATE_CODES = {
     "I":    0,
@@ -75,7 +71,6 @@ _GATE_CODES = {
     "Y/2":  5,
     "-Y/2": 6,
 }
-_END_CODE = 7   # sentinel written at the end of the gate sequence in dmem
 
 _INTERLEAVED_FILE_SUFFIX = {
     "X":    "X",
@@ -108,20 +103,16 @@ class RBAsmProgram(BaseProgram):
         if cfg.get("cooling", False):
             self.apply_cool(cfg)
 
-        # ── 宣告 dispatch loop 用的暫存器 ──────────────────────────────
-        # 必須在 _initialize() 中明確呼叫 add_reg()，
-        # 否則 write_reg / read_dmem / cond_jump 中的 _get_reg() 會找不到名稱。
-        self.add_reg("gate_idx")   # 當前 gate 的 dmem 位址 index
+        # gate_idx register is allocated automatically by open_loop()
         self.add_reg("gate_code")  # 從 dmem 讀出的 gate 代碼
 
     def compile_datamem(self):
         """
         Override ``QickProgramV2.compile_datamem()`` to statically initialise dmem.
 
-        Encodes the gate sequence as an integer array written to dmem with an
-        END sentinel (code 7) appended.  This does not consume pmem — dmem is
-        an independent binary segment uploaded to tProc data memory at acquire
-        time by the QICK framework.
+        Encodes the gate sequence as an integer array written to dmem.
+        No sentinel is needed because loop termination is handled by
+        ``open_loop`` / ``close_loop``.
 
         Returns
         -------
@@ -129,47 +120,30 @@ class RBAsmProgram(BaseProgram):
             dmem initialisation array.
         """
         gate_seq = self.cfg["gate_seq"]
-        codes = [_GATE_CODES[g] for g in gate_seq] + [_END_CODE]
+        codes = [_GATE_CODES[g] for g in gate_seq]
         return np.array(codes, dtype=np.int64)
 
     def _body(self, cfg):
         """Implement the ASMv2 gate-dispatch loop and final measurement."""
         pfx = cfg.get("prefix", "ge")
 
-        # ── 計算每個 gate 的固定時間槽 ─────────────────────────────────
-        # 所有非 identity gate 的 pulse length = sigma * 5（arb / Gaussian）。
         # 使用 delay(slot) 而非 delay_auto()，原因見模組 docstring。
-        gate_len = cfg[f"sigma_{pfx}"] * 5   # µs，Gaussian pulse 長度
-        gap      = 0.01                       # µs，inter-gate gap
-        slot     = gate_len + gap             # µs，每個 gate 的固定時間槽
+        gate_len = cfg[f"sigma_{pfx}"] * 5   # µs
+        gap      = 0.01                       # µs
+        slot     = gate_len + gap
 
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
         if cfg.get("cooling", False):
             self.cooling_body(cfg)
 
-        # ── 初始化 index 暫存器 ──────────────────────────────────────────
-        # write_reg(dst, src): tProc REG_WR 指令，將立即值寫入具名暫存器
-        self.write_reg("gate_idx", 0)
+        # ── 硬體迴圈：open_loop 自動分配 gate_idx register ──────────────
+        # gate_idx 從 0 遞增到 N-1，close_loop() 負責遞增與跳回。
+        self.open_loop(len(cfg["gate_seq"]), name="gate_idx")
 
-        # ── Dispatch loop ────────────────────────────────────────────────
-        # label(name): 為下一條指令貼上標籤，供 jump / cond_jump 使用
-        self.label("dispatch_loop")
-
-        # read_dmem(dst, addr): 從 dmem[gate_idx] 讀值到 gate_code 暫存器
-        # addr 為暫存器名稱時使用間接定址 → dmem[r_gate_idx]
+        # read_dmem(dst, addr)：從 dmem[gate_idx] 讀值到 gate_code
         self.read_dmem("gate_code", "gate_idx")
 
-        # ── END sentinel 偵測 ──────────────────────────────────────────
-        # cond_jump(label, arg1, test, op, arg2):
-        #   TEST 指令：計算 arg1 op arg2，測試結果
-        #   test="Z"：結果為零時跳躍（即 gate_code - 7 == 0 → gate_code == 7）
-        #   TEST 是 non-destructive，gate_code 暫存器不被修改
-        self.cond_jump("seq_done", "gate_code", "Z", op="-", arg2=_END_CODE)
-
         # ── 線性分派鏈（switch-case 等效）────────────────────────────────
-        # QICK ASMv2 沒有 computed jump（無法用暫存器值當跳躍位址），
-        # 因此用一系列 cond_jump 模擬 jump table。
-        # 每次比較都是 TEST + JUMP，共 7 條指令（含 END check 共 8 條）。
         self.cond_jump("GATE_I",   "gate_code", "Z")                   # code 0
         self.cond_jump("GATE_X",   "gate_code", "Z", op="-", arg2=1)  # code 1
         self.cond_jump("GATE_Y",   "gate_code", "Z", op="-", arg2=2)  # code 2
@@ -177,20 +151,10 @@ class RBAsmProgram(BaseProgram):
         self.cond_jump("GATE_mX2", "gate_code", "Z", op="-", arg2=4)  # code 4
         self.cond_jump("GATE_Y2",  "gate_code", "Z", op="-", arg2=5)  # code 5
         self.cond_jump("GATE_mY2", "gate_code", "Z", op="-", arg2=6)  # code 6
-        # 正常情況下不會到這裡（gate_code 只有 0–7）
-        self.jump("POST_GATE")
+        self.jump("POST_GATE")  # safety fallthrough
 
         # ── Gate blocks ──────────────────────────────────────────────────
-        # 每個 block 結構：
-        #   (optional) pulse(ch, name, t=0)  →  fire at current ref_time
-        #   delay(slot)                      →  inc_ref by slot ticks
-        #   jump("POST_GATE")                →  回到公共後處理
-        #
-        # identity gate：不打 pulse，只用 delay 佔據相同時間槽，
-        # 確保 identity 與非 identity gate 的總時序一致。
-
         self.label("GATE_I")
-        # delay(t)：TIME inc_ref #slot_ticks，不讀 compile-time 累積時間軸
         self.delay(slot)
         self.jump("POST_GATE")
 
@@ -222,20 +186,11 @@ class RBAsmProgram(BaseProgram):
         self.label("GATE_mY2")
         self.pulse(ch=cfg["qb_ch"], name=f"y90m_{pfx}", t=0)
         self.delay(slot)
-        self.jump("POST_GATE")
 
-        # ── 每個 gate 共用的後處理 ────────────────────────────────────────
-        # inc_reg(dst, src)：dst = dst + src，tProc REG_WR + OP
+        # ── close_loop：遞增 gate_idx，若未完成則跳回 open_loop 標籤 ────
         self.label("POST_GATE")
-        self.inc_reg("gate_idx", 1)
-        # jump(label)：無條件跳躍，tProc JUMP 指令
-        self.jump("dispatch_loop")
+        self.close_loop()
 
-        # ── 序列結束，執行量測 ────────────────────────────────────────────
-        self.label("seq_done")
-        # 使用 delay(0.05) 而非 delay_auto(0.05)，
-        # 避免 compile-time 累積時間軸污染 waiting gap 的數值。
-        # ref_time 此時已正確指向最後一個 gate 結束後 gap µs 的位置。
         self.delay(0.05)
         self.measure(cfg)
 
