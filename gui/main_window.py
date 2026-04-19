@@ -18,27 +18,53 @@ from .panels.plot_panel       import PlotPanel
 # ── Background worker (stub — wire to real experiment later) ──────────────────
 
 class AcquireWorker(QThread):
-    """Run an experiment off the GUI thread."""
+    """
+    Run an experiment off the GUI thread.
+
+    In debug mode the worker calls the mock data generator instead of
+    importing and executing the real experiment class.
+
+    Parameters
+    ----------
+    class_path : str
+        ``"module.ClassName"`` from EXPERIMENT_REGISTRY.
+    params : dict
+        Parameter dict from the experiment form.
+    debug : bool
+        When ``True`` use synthetic data; no hardware calls are made.
+    parent : QObject, optional
+        Qt parent object.
+    """
 
     data_ready  = Signal(object, object, str, str)  # x, iq, xlabel, title
     log_message = Signal(str, str)                   # msg, level
     finished    = Signal()
 
-    def __init__(self, class_path: str, params: dict, parent=None):
+    def __init__(self, class_path: str, params: dict,
+                 debug: bool = False, parent=None):
         super().__init__(parent)
         self.class_path = class_path
         self.params     = params
+        self.debug      = debug
 
     def run(self):
-        self.log_message.emit(f"Starting {self.class_path.split('.')[-1]}…", "info")
+        name = self.class_path.split(".")[-1]
+        self.log_message.emit(f"Starting {name}…", "info")
         try:
-            # TODO: import and instantiate the actual experiment class, call .run()
-            # import importlib
-            # mod_name, cls_name = self.class_path.rsplit(".", 1)
-            # mod = importlib.import_module(f"qick_workspace.scrip.{mod_name}")
-            # expt = getattr(mod, cls_name)(params=self.params)
-            # expt.run()
-            # self.data_ready.emit(expt._sweep_vals_x, expt.iqdata, "x", cls_name)
+            if self.debug:
+                from gui.mock.runner import generate_mock_data
+                x, iq, xlabel, title = generate_mock_data(self.class_path, self.params)
+                self.data_ready.emit(x, iq, xlabel, title)
+            else:
+                # TODO: wire to real experiment classes
+                # import importlib
+                # mod_name, cls_name = self.class_path.rsplit(".", 1)
+                # mod  = importlib.import_module(f"qick_workspace.scrip.{mod_name}")
+                # expt = getattr(mod, cls_name)(run_cfg)
+                # expt.run(py_avg=self.params["py_avg"])
+                # self.data_ready.emit(expt._sweep_vals_x, expt.iqdata,
+                #                      expt.X_LABEL, expt.TITLE_PREFIX)
+                pass
             self.log_message.emit("Experiment complete.", "success")
         except Exception as exc:
             self.log_message.emit(f"Error: {exc}", "error")
@@ -51,9 +77,13 @@ class AcquireWorker(QThread):
 class MainWindow(QMainWindow):
     """Main application window with dockable panels."""
 
-    def __init__(self):
+    def __init__(self, debug: bool = False):
         super().__init__()
-        self.setWindowTitle("qick_workspace  ·  Control Panel")
+        self._debug = debug
+        title = "qick_workspace  ·  Control Panel"
+        if debug:
+            title += "  [SIMULATION]"
+        self.setWindowTitle(title)
         self.resize(1440, 860)
         self._worker: AcquireWorker | None = None
         self._browser_procs: list[QProcess] = []
@@ -61,6 +91,10 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self._setup_shortcuts()
         self._restore_geometry()
+        if debug:
+            self._lbl_debug.setVisible(True)
+            self.log("Simulation mode active — no hardware required.", "warn")
+            self._auto_connect_mock()
 
     # ── Layout ────────────────────────────────────────────────────────────────
 
@@ -110,6 +144,9 @@ class MainWindow(QMainWindow):
         self._lbl_conn  = QLabel("Disconnected")
         self._lbl_qubit = QLabel("Q0")
         self._lbl_state = QLabel("Ready")
+        self._lbl_debug = QLabel("⬡ SIM")
+        self._lbl_debug.setStyleSheet("color: #f0d050; font-weight: bold; font-size: 11px;")
+        self._lbl_debug.setVisible(False)
         self._progress  = QProgressBar()
         self._progress.setRange(0, 0)           # indeterminate
         self._progress.setFixedWidth(140)
@@ -123,6 +160,8 @@ class MainWindow(QMainWindow):
         sb.addWidget(self._lbl_qubit)
         sb.addWidget(_sep())
         sb.addWidget(self._lbl_state)
+        sb.addWidget(_sep())
+        sb.addWidget(self._lbl_debug)
         sb.addPermanentWidget(self._progress)
         self.setStatusBar(sb)
 
@@ -192,11 +231,18 @@ class MainWindow(QMainWindow):
     def _on_config(self, path: str):
         self.log(f"Config loaded: {path}", "info")
 
+    def _auto_connect_mock(self):
+        """Fire a simulated connection immediately on startup in debug mode."""
+        from gui.mock.hardware import MockSoc, MockSoccfg
+        QTimer.singleShot(300, lambda: (
+            self.setup_panel._on_success(MockSoc(), MockSoccfg()),
+        ))
+
     def _on_run(self, class_path: str, params: dict):
         if self._worker and self._worker.isRunning():
             self.log("Already running — stop first.", "warn")
             return
-        self._worker = AcquireWorker(class_path, params, self)
+        self._worker = AcquireWorker(class_path, params, self._debug, self)
         self._worker.log_message.connect(self.log)
         self._worker.data_ready.connect(self.plot_panel.update_data)
         self._worker.finished.connect(self._on_worker_done)
