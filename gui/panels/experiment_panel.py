@@ -68,7 +68,7 @@ EXPERIMENT_REGISTRY = {
 _P = {
     # ── reusable building blocks ──────────────────────────────────────────────
     "_py_avg":      ("py_avg",      "int",   10,    1,      500,   "Python-level averages"),
-    "_reps":        ("reps",        "int",   1000,  100,  50000,   "Hardware reps per point"),
+    "_reps":        ("reps",        "int",   100,   100,  50000,   "Hardware reps per point"),
     "_relax":       ("relax_delay", "float", 50.0,  0.1,  5000.0,  "Relax delay between shots (µs)"),
     "_steps":       ("steps",       "int",   100,   10,   2000,    "Sweep points"),
     "_sigma_ge":    ("sigma_ge",    "float", 0.01,  0.001, 1.0,   "Gaussian σ of GE π-pulse (µs)"),
@@ -86,7 +86,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
     # ── Setup ─────────────────────────────────────────────────────────────────
 
     "s001_time_of_flight.TOF": [
-        ("reps",         "int",   1000,  100,  50000, "Hardware reps"),
+        ("py_avg",       "int",   1000,  1,    10000, "Software averages (hardware reps forced to 1)"),
         ("relax_delay",  "float", 100.0, 0.1,  5000.0,"Relax delay (µs)"),
         ("ro_length",    "float", 2.5,   0.1,  20.0,  "Readout window length (µs)"),
         ("res_length",   "float", 1.7,   0.1,  10.0,  "Resonator drive length (µs)"),
@@ -98,7 +98,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s002_res_spec_ge.ResonatorSpec": [
         ("py_avg",       "int",   5,     1,    500,   "Python-level averages"),
-        ("reps",         "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",         "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",  "float", 0.0,   0.0,  5000.0,"Relax delay (µs)"),
         ("freq_center",  "float", 6500., 1000.,12000.,"Resonator center frequency (MHz)"),
         ("freq_span",    "float", 10.0,  0.1,  500.0, "Sweep half-span each side (MHz)"),
@@ -108,7 +108,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s002b_res_punchout_ge.Punchout": [
         ("py_avg",       "int",   100,   1,    500,   "Python-level averages"),
-        ("reps",         "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",         "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",  "float", 0.0,   0.0,  5000.0,"Relax delay (µs)"),
         ("freq_center",  "float", 6500., 1000.,12000.,"Resonator center frequency (MHz)"),
         ("freq_span",    "float", 20.0,  0.1,  500.0, "Frequency half-span each side (MHz)"),
@@ -120,7 +120,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s002c_res_spec_ge_flux.ResonatorSpecFlux": [
         ("py_avg",           "int",   10,    1,    500,   "Python-level averages"),
-        ("reps",             "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",             "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",      "float", 0.0,   0.0,  5000.0,"Relax delay (µs)"),
         ("freq_center",      "float", 6500., 1000.,12000.,"Resonator center frequency (MHz)"),
         ("freq_span",        "float", 10.0,  0.1,  500.0, "Frequency half-span each side (MHz)"),
@@ -137,7 +137,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s003_qubit_spec_ge.QubitSpec": [
         ("py_avg",               "int",   5,     1,    500,   "Python-level averages"),
-        ("reps",                 "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",                 "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",          "float", 1.0,   0.0,  5000.0,"Relax delay (µs)"),
         ("freq_center",          "float", 3620., 500., 9000., "Qubit center frequency (MHz)"),
         ("freq_span",            "float", 50.0,  1.0,  500.0, "Sweep half-span each side (MHz)"),
@@ -149,7 +149,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s003a_qubit_flux_spec_ge.QubitSpecFlux": [
         ("py_avg",               "int",   500,   1,    2000,  "Python-level averages"),
-        ("reps",                 "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",                 "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",          "float", 1.0,   0.0,  5000.0,"Relax delay (µs)"),
         ("freq_center",          "float", 5970., 500., 9000., "Qubit center frequency (MHz)"),
         ("freq_span",            "float", 50.0,  1.0,  500.0, "Frequency half-span each side (MHz)"),
@@ -165,7 +165,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s004_time_rabi_ge.TimeRabi": [
         ("py_avg",       "int",   100,   1,    500,   "Python-level averages"),
-        ("reps",         "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",         "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",  "float", 50.0,  0.1,  5000.0,"Relax delay (µs)"),
         ("sigma_ge",     "float", 0.01,  0.001, 1.0,  "Gaussian σ of GE π-pulse (µs)"),
         ("qb_gain_ge",   "float", 0.5,   0.0,  1.0,   "Qubit drive gain [0–1]"),
@@ -176,7 +176,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s005_power_rabi_ge.PowerRabi": [
         ("py_avg",       "int",   5,     1,    500,   "Python-level averages"),
-        ("reps",         "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",         "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",  "float", 200.0, 0.1,  5000.0,"Relax delay (µs)"),
         ("sigma_ge",     "float", 0.01,  0.001, 1.0,  "Gaussian σ of GE π-pulse (µs)"),
         ("nqz_qb",       "int",   2,     1,    3,     "Nyquist zone of qubit channel"),
@@ -187,7 +187,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s005a_drag.DragCalibration": [
         ("py_avg",       "int",   5,     1,    500,   "Python-level averages"),
-        ("reps",         "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",         "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",  "float", 200.0, 0.1,  5000.0,"Relax delay (µs)"),
         ("alpha_start",  "float",-1.0,  -5.0,  0.0,  "DRAG α sweep start"),
         ("alpha_stop",   "float", 1.5,   0.0,  5.0,  "DRAG α sweep stop"),
@@ -199,7 +199,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s005a_AAE.PowerRabiChevron": [
         ("py_avg",           "int",   10,    1,    500,   "Python-level averages"),
-        ("reps",             "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",             "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",      "float", 200.0, 0.1,  5000.0,"Relax delay (µs)"),
         ("gain_half_span",   "float", 0.1,   0.001, 0.5,  "Gain sweep ± around π-gain"),
         ("steps",            "int",   100,   10,   2000,  "Sweep points"),
@@ -212,7 +212,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s006_Ramsey_ge.Ramsey": [
         ("py_avg",       "int",   20,    1,    500,   "Python-level averages"),
-        ("reps",         "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",         "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",  "float", 50.0,  0.1,  5000.0,"Relax delay (µs)"),
         ("time_start",   "float", 0.0,   0.0,  100.0, "Wait-time sweep start (µs)"),
         ("time_stop",    "float", 2.0,   0.01, 2000.0,"Wait-time sweep stop (µs)"),
@@ -222,7 +222,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s007_SpinEcho_ge.SpinEcho": [
         ("py_avg",       "int",   100,   1,    500,   "Python-level averages"),
-        ("reps",         "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",         "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",  "float", 50.0,  0.1,  5000.0,"Relax delay (µs)"),
         ("time_start",   "float", 0.0,   0.0,  100.0, "Wait-time sweep start (µs)"),
         ("time_stop",    "float", 150.0, 1.0,  5000.0,"Wait-time sweep stop (µs)"),
@@ -232,7 +232,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s008_T1_ge.T1": [
         ("py_avg",       "int",   50,    1,    500,   "Python-level averages"),
-        ("reps",         "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",         "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",  "float", 50.0,  0.1,  5000.0,"Relax delay (µs)"),
         ("time_start",   "float", 0.0,   0.0,  100.0, "Wait-time sweep start (µs)"),
         ("time_stop",    "float", 400.0, 1.0,  5000.0,"Wait-time sweep stop (µs)"),
@@ -243,7 +243,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s009_res_spec_ef.ResonatorSpec_ef": [
         ("py_avg",       "int",   20,    1,    500,   "Python-level averages"),
-        ("reps",         "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",         "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",  "float", 0.0,   0.0,  5000.0,"Relax delay (µs)"),
         ("freq_center",  "float", 6500., 1000.,12000.,"Resonator center frequency (MHz)"),
         ("freq_span",    "float", 10.0,  0.1,  500.0, "Sweep half-span each side (MHz)"),
@@ -253,7 +253,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s010_qubit_spec_ef.QubitSpec_ef": [
         ("py_avg",               "int",   10,    1,    500,   "Python-level averages"),
-        ("reps",                 "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",                 "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",          "float", 1.0,   0.0,  5000.0,"Relax delay (µs)"),
         ("freq_center",          "float", 3420., 500., 9000., "EF center freq (MHz); ~f_ge − 200"),
         ("freq_span",            "float", 100.0, 1.0,  500.0, "Sweep half-span each side (MHz)"),
@@ -265,7 +265,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s011_power_rabi_ef.PowerRabi_ef": [
         ("py_avg",       "int",   50,    1,    500,   "Python-level averages"),
-        ("reps",         "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",         "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",  "float", 200.0, 0.1,  5000.0,"Relax delay (µs)"),
         ("sigma_ef",     "float", 0.01,  0.001, 1.0,  "Gaussian σ of EF π-pulse (µs)"),
         ("gain_start",   "float", 0.0,   0.0,  1.0,   "Gain sweep start [0–1]"),
@@ -276,7 +276,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s012_Ramsey_ef.Ramsey_ef": [
         ("py_avg",       "int",   100,   1,    500,   "Python-level averages"),
-        ("reps",         "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",         "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",  "float", 50.0,  0.1,  5000.0,"Relax delay (µs)"),
         ("time_start",   "float", 0.0,   0.0,  100.0, "Wait-time sweep start (µs)"),
         ("time_stop",    "float", 2.0,   0.01, 2000.0,"Wait-time sweep stop (µs)"),
@@ -287,7 +287,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s013_T1_ef.T1_ef": [
         ("py_avg",       "int",   50,    1,    500,   "Python-level averages"),
-        ("reps",         "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",         "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",  "float", 50.0,  0.1,  5000.0,"Relax delay (µs)"),
         ("time_start",   "float", 0.0,   0.0,  100.0, "Wait-time sweep start (µs)"),
         ("time_stop",    "float", 400.0, 1.0,  5000.0,"Wait-time sweep stop (µs)"),
@@ -298,7 +298,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s014_AllXY.AllXY": [
         ("py_avg",       "int",   10,    1,    500,   "Python-level averages"),
-        ("reps",         "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",         "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",  "float", 50.0,  0.1,  5000.0,"Relax delay (µs)"),
         ("pulse_type",   "combo", "flat_top", ["flat_top", "drag"], None,
          "Qubit pulse envelope shape"),
@@ -326,7 +326,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s013_qubit_temp.QubitTemperatureEf": [
         ("py_avg",       "int",   5,     1,    500,   "Python-level averages"),
-        ("reps",         "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",         "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",  "float", 100.0, 0.1,  5000.0,"Relax delay (µs)"),
         ("sigma_ef",     "float", 0.01,  0.001, 1.0,  "Gaussian σ of EF π-pulse (µs)"),
         ("gain_start",   "float", 0.0,   0.0,  1.0,   "EF gain sweep start [0–1]"),
@@ -337,7 +337,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s006_ac_stark.AcStarkCalib": [
         ("py_avg",       "int",   10,    1,    500,   "Python-level averages"),
-        ("reps",         "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",         "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",  "float", 50.0,  0.1,  5000.0,"Relax delay (µs)"),
         ("steps",        "int",   100,   10,   2000,  "Sweep points"),
     ],
@@ -346,7 +346,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s015_Single_qubit_RB.RandomizedBenchmarking": [
         ("py_avg",            "int",   5,     1,    500,   "Python-level averages"),
-        ("reps",              "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",              "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",       "float", 50.0,  0.1,  5000.0,"Relax delay (µs)"),
         ("max_circuit_depth", "int",   400,   10,   5000,  "Maximum Clifford circuit depth"),
         ("delta_clifford",    "int",   40,    1,    500,   "Step size between circuit depths"),
@@ -357,7 +357,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s015_Auto_RB.AutoRB": [
         ("py_avg",            "int",   5,     1,    500,   "Python-level averages"),
-        ("reps",              "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",              "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",       "float", 50.0,  0.1,  5000.0,"Relax delay (µs)"),
         ("max_circuit_depth", "int",   600,   10,   5000,  "Maximum Clifford circuit depth"),
         ("delta_clifford",    "int",   50,    1,    500,   "Step size between circuit depths"),
@@ -368,7 +368,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s015_RB_asm.RandomizedBenchmarkingAsm": [
         ("py_avg",            "int",   5,     1,    500,   "Python-level averages"),
-        ("reps",              "int",   1000,  100,  50000, "Hardware reps per point"),
+        ("reps",              "int",   100,   100,  50000, "Hardware reps per point"),
         ("relax_delay",       "float", 50.0,  0.1,  5000.0,"Relax delay (µs)"),
         ("max_circuit_depth", "int",   400,   10,   5000,  "Maximum Clifford circuit depth"),
         ("delta_clifford",    "int",   40,    1,    500,   "Step size between circuit depths"),
@@ -379,7 +379,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
     "s016_state_tomography.Tomography": [
         ("py_avg",          "int",   5,    1,   500,   "Python-level averages"),
-        ("reps",            "int",   1000, 100, 50000, "Hardware reps per point"),
+        ("reps",            "int",   100,  100, 50000, "Hardware reps per point"),
         ("relax_delay",     "float", 50.0, 0.1, 5000.0,"Relax delay (µs)"),
         ("prep_pulse_name", "combo", "x180",
          ["x180", "x90", "y180", "y90", "identity"], None,
@@ -389,7 +389,7 @@ EXPT_PARAMS: dict[str, list[tuple]] = {
 
 _FALLBACK_PARAMS: list[tuple] = [
     ("py_avg",      "int",   10,    1,      500,    "Python-level averages"),
-    ("reps",        "int",   1000,  100,  50000,    "Hardware reps per point"),
+    ("reps",        "int",   100,   100,  50000,    "Hardware reps per point"),
     ("relax_delay", "float", 50.0,  0.1,  5000.0,  "Relax delay (µs)"),
     ("steps",       "int",   100,   10,   2000,     "Sweep points"),
 ]

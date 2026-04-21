@@ -11,10 +11,6 @@ import numpy as np
 import yaml
 from addict import Dict as AddictDict
 
-try:
-    import Labber
-except ImportError:
-    print("No Labber module")
 
 
 # =============================================================================
@@ -65,6 +61,11 @@ def get_next_filename_labber(
 
     # 2. Check Yoko mode.
     if yoko_value is not None:
+        if not isinstance(yoko_value, dict):
+            raise ValueError(
+                "yoko_value must be a dict with 'value' and 'unit' keys "
+                "(e.g. from yoko.GetValue()). Got: %s" % type(yoko_value).__name__
+            )
         try:
             value = yoko_value["value"]
             value = auto_unit(value)
@@ -129,6 +130,11 @@ def hdf5_generator(
     tag : str, optional
         Labber tag string associated with the log file.
     """
+    try:
+        import Labber
+    except ImportError as e:
+        raise ImportError("Labber is required to save HDF5 files.") from e
+
     np.float = float
     np.bool = bool
     zdata = z_info["values"]

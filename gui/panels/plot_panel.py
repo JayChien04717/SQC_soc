@@ -22,6 +22,9 @@ class PlotPanel(QWidget):
         self._iq     = None
         self._xlabel = ""
         self._title  = ""
+        self._line   = None   # reused Line2D for liveplot
+        self._mesh   = None   # reused QuadMesh for 2D liveplot
+        self._cbar   = None   # colorbar reference for 2D
         self._build_ui()
 
     # ── UI ────────────────────────────────────────────────────────────────────
@@ -37,7 +40,7 @@ class PlotPanel(QWidget):
         self.mode_combo = QComboBox()
         self.mode_combo.addItems(["mag", "phase", "avgi", "avgq"])
         self.mode_combo.setToolTip("IQ channel to display")
-        self.mode_combo.currentTextChanged.connect(self._replot)
+        self.mode_combo.currentTextChanged.connect(self._on_mode_changed)
         ctrl.addWidget(self.mode_combo)
 
         self.autoscale_cb = QCheckBox("Autoscale")
@@ -85,6 +88,10 @@ class PlotPanel(QWidget):
 
     def clear(self):
         self._x = self._iq = None
+        self._line = self._mesh = None
+        if self._cbar is not None:
+            self._cbar.remove()
+            self._cbar = None
         self.ax.cla()
         self._style_ax(self.ax)
         self.canvas.draw_idle()
@@ -97,6 +104,11 @@ class PlotPanel(QWidget):
             self.fig.savefig(path, dpi=150, facecolor=BG0)
 
     # ── Internal ──────────────────────────────────────────────────────────────
+
+    def _on_mode_changed(self):
+        """Force full redraw when IQ channel selection changes."""
+        self._line = self._mesh = None
+        self._replot()
 
     def _replot(self):
         if self._x is None or self._iq is None:
@@ -116,28 +128,53 @@ class PlotPanel(QWidget):
             "avgq":  lambda q: np.imag(q),
         }
         y = extractors[mode](self._iq)
+        is_2d = y.ndim > 1
 
-        self.ax.cla()
-        self._style_ax(self.ax)
+        # Determine if we can update in-place (same dimensionality and shape)
+        can_update = (
+            (not is_2d and self._line is not None and
+             self._line.get_xdata().shape == self._x.shape)
+            or
+            (is_2d and self._mesh is not None and
+             self._mesh.get_array().shape == y.ravel().shape)
+        )
 
-        if y.ndim == 1:
-            self.ax.plot(self._x, y, ".-", color=ACCENT, markersize=3, linewidth=1.2)
+        if can_update:
+            if is_2d:
+                self._mesh.set_array(y.ravel())
+                self._mesh.set_clim(y.min(), y.max())
+            else:
+                self._line.set_ydata(y)
+                if self.autoscale_cb.isChecked():
+                    self.ax.relim()
+                    self.ax.autoscale_view()
+            self.ax.set_title(self._title or "", fontsize=9)
         else:
-            im = self.ax.imshow(
-                y, aspect="auto",
-                extent=[self._x[0], self._x[-1], 0, y.shape[0]],
-                origin="lower", cmap="RdBu_r",
-            )
-            self.fig.colorbar(im, ax=self.ax, pad=0.02)
+            # Full redraw on first call or shape change
+            self._line = self._mesh = None
+            if self._cbar is not None:
+                self._cbar.remove()
+                self._cbar = None
+            self.ax.cla()
+            self._style_ax(self.ax)
 
-        self.ax.set_xlabel(self._xlabel)
-        self.ax.set_ylabel(ylabel_map[mode])
-        if self._title:
-            self.ax.set_title(self._title, fontsize=9)
+            if is_2d:
+                self._mesh = self.ax.pcolormesh(
+                    self._x, np.arange(y.shape[0]), y,
+                    cmap="RdBu_r", shading="auto",
+                )
+                self._cbar = self.fig.colorbar(self._mesh, ax=self.ax, pad=0.02)
+            else:
+                (self._line,) = self.ax.plot(
+                    self._x, y, ".-", color=ACCENT, markersize=3, linewidth=1.2,
+                )
+                if self.autoscale_cb.isChecked():
+                    self.ax.relim()
+                    self.ax.autoscale_view()
 
-        if self.autoscale_cb.isChecked():
-            self.ax.relim()
-            self.ax.autoscale_view()
+            self.ax.set_xlabel(self._xlabel)
+            self.ax.set_ylabel(ylabel_map[mode])
+            self.ax.set_title(self._title or "", fontsize=9)
 
         self.canvas.draw_idle()
 

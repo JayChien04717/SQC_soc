@@ -1,4 +1,6 @@
+import importlib
 import sys
+import traceback
 from datetime import datetime
 from pathlib import Path
 
@@ -15,14 +17,151 @@ from .panels.experiment_panel import ExperimentPanel
 from .panels.plot_panel       import PlotPanel
 
 
-# ── Background worker (stub — wire to real experiment later) ──────────────────
+# ── Sweep config builder ──────────────────────────────────────────────────────
+
+def _build_run_cfg(class_path: str, qubit_cfg: dict, params: dict) -> dict:
+    """
+    Merge qubit hardware config with GUI form params.
+
+    Simple overrides (reps, relax_delay) are applied first.  Per-experiment
+    sweep axes are converted to QickSweep1D objects as the notebook does.
+    """
+    from qick.asm_v2 import QickSweep1D
+
+    cfg = dict(qubit_cfg)
+    for key in ("reps", "relax_delay"):
+        if key in params:
+            cfg[key] = params[key]
+
+    cp = class_path
+
+    if cp == "s001_time_of_flight.TOF":
+        cfg["reps"] = 1  # TOF always acquires reps=1; averaging done in software
+        for k in ("ro_length", "res_length", "res_gain_ge", "res_ch"):
+            if k in params:
+                cfg[k] = params[k]
+
+    elif cp == "s002_res_spec_ge.ResonatorSpec":
+        center, span = params["freq_center"], params["freq_span"]
+        cfg.update({"steps": params["steps"], "res_gain_ge": params["res_gain_ge"],
+                    "res_freq_ge": QickSweep1D("freqloop", center - span, center + span)})
+
+    elif cp == "s002b_res_punchout_ge.Punchout":
+        fc, fs = params["freq_center"], params["freq_span"]
+        cfg.update({"f_steps": params["freq_steps"], "g_steps": params["gain_steps"],
+                    "res_freq_ge": QickSweep1D("freqloop", fc - fs, fc + fs),
+                    "res_gain_ge": QickSweep1D("gainloop", params["gain_start"], params["gain_stop"])})
+
+    elif cp == "s002c_res_spec_ge_flux.ResonatorSpecFlux":
+        fc, fs = params["freq_center"], params["freq_span"]
+        cfg.update({"res_gain_ge": params["res_gain_ge"],
+                    "freq_steps": params["freq_steps"],
+                    "flux_ch": params["flux_ch"], "flux_length": params["flux_length"],
+                    "res_freq_ge": QickSweep1D("freqloop", fc - fs, fc + fs),
+                    "flux_gain": QickSweep1D("fluxloop", params["flux_gain_start"], params["flux_gain_stop"]),
+                    "steps_flux": params["flux_steps"]})
+
+    elif cp == "s003_qubit_spec_ge.QubitSpec":
+        center, span = params["freq_center"], params["freq_span"]
+        cfg.update({"steps": params["steps"], "qb_gain_ge": params["qb_gain_ge"],
+                    "qb_flat_top_length_ge": params["qb_flat_top_length_ge"],
+                    "nqz_qb": params["nqz_qb"], "qb_mixer": center,
+                    "qb_freq_ge": QickSweep1D("freqloop", center - span, center + span)})
+
+    elif cp == "s003a_qubit_flux_spec_ge.QubitSpecFlux":
+        center, span = params["freq_center"], params["freq_span"]
+        cfg.update({"freq_steps": params["freq_steps"], "qb_gain_ge": params["qb_gain_ge"],
+                    "qb_flat_top_length_ge": params["qb_flat_top_length_ge"],
+                    "flux_ch": params["flux_ch"], "flux_length": params["flux_length"],
+                    "qb_mixer": center,
+                    "qb_freq_ge": QickSweep1D("freqloop", center - span, center + span),
+                    "flux_gain": QickSweep1D("fluxloop", params["flux_gain_start"], params["flux_gain_stop"]),
+                    "steps_flux": params["flux_steps"]})
+
+    elif cp == "s004_time_rabi_ge.TimeRabi":
+        cfg.update({"sigma_ge": params["sigma_ge"], "qb_gain_ge": params["qb_gain_ge"],
+                    "steps": params["steps"],
+                    "qb_flat_top_length_ge": QickSweep1D("lenloop", params["length_start"], params["length_stop"])})
+
+    elif cp == "s005_power_rabi_ge.PowerRabi":
+        cfg.update({"sigma_ge": params["sigma_ge"], "nqz_qb": params["nqz_qb"],
+                    "steps": params["steps"],
+                    "qb_gain_ge": QickSweep1D("gainloop", params["gain_start"], params["gain_stop"])})
+
+    elif cp == "s005a_drag.DragCalibration":
+        cfg.update({k: params[k] for k in
+                    ("alpha_start", "alpha_stop", "alpha_steps",
+                     "iter_start", "iter_stop", "iter_step")})
+
+    elif cp == "s005a_AAE.PowerRabiChevron":
+        focus = cfg.get("pi_gain_ge", 0.5)
+        half  = params["gain_half_span"]
+        cfg.update({"steps": params["steps"],
+                    "iter_start": params["iter_start"], "iter_stop": params["iter_stop"],
+                    "iter_step": params["iter_step"],
+                    "qb_gain_ge": QickSweep1D("gainloop", focus - half, focus + half)})
+
+    elif cp in ("s006_Ramsey_ge.Ramsey", "s012_Ramsey_ef.Ramsey_ef"):
+        cfg.update({"steps": params["steps"], "ramsey_freq": params["ramsey_freq"],
+                    "wait_time": QickSweep1D("waitloop", params["time_start"], params["time_stop"])})
+        if "ge_ref" in params:
+            cfg["ge_ref"] = params["ge_ref"]
+
+    elif cp == "s007_SpinEcho_ge.SpinEcho":
+        cfg.update({"steps": params["steps"], "ramsey_freq": params["ramsey_freq"],
+                    "wait_time": QickSweep1D("waitloop", params["time_start"], params["time_stop"])})
+
+    elif cp in ("s008_T1_ge.T1", "s013_T1_ef.T1_ef"):
+        cfg.update({"steps": params["steps"],
+                    "wait_time": QickSweep1D("waitloop", params["time_start"], params["time_stop"])})
+
+    elif cp == "s009_res_spec_ef.ResonatorSpec_ef":
+        center, span = params["freq_center"], params["freq_span"]
+        cfg.update({"res_gain_ge": params["res_gain_ge"], "steps": params["steps"],
+                    "res_freq_ge": QickSweep1D("freqloop", center - span, center + span)})
+
+    elif cp == "s010_qubit_spec_ef.QubitSpec_ef":
+        center, span = params["freq_center"], params["freq_span"]
+        cfg.update({"steps": params["steps"], "qb_gain_ef": params["qb_gain_ef"],
+                    "qb_flat_top_length_ef": params["qb_flat_top_length_ef"],
+                    "ge_ref": params["ge_ref"],
+                    "qb_freq_ef": QickSweep1D("freqloop", center - span, center + span)})
+
+    elif cp == "s011_power_rabi_ef.PowerRabi_ef":
+        cfg.update({"sigma_ef": params["sigma_ef"], "steps": params["steps"],
+                    "ge_ref": params["ge_ref"],
+                    "qb_gain_ef": QickSweep1D("gainloop", params["gain_start"], params["gain_stop"])})
+
+    elif cp == "s013_qubit_temp.QubitTemperatureEf":
+        cfg.update({"sigma_ef": params["sigma_ef"], "steps": params["steps"],
+                    "ge_ref": params["ge_ref"],
+                    "qb_gain_ef": QickSweep1D("gainloop", params["gain_start"], params["gain_stop"])})
+
+    elif cp == "s014_AllXY.AllXY":
+        cfg["pulse_type"] = params["pulse_type"]
+
+    elif cp == "s000_SingleShot_prog.SingleShot_gef":
+        cfg["shot_f"] = params["shot_f"]
+
+    elif cp in ("s015_Single_qubit_RB.RandomizedBenchmarking",
+                "s015_Auto_RB.AutoRB", "s015_RB_asm.RandomizedBenchmarkingAsm"):
+        cfg.update({k: params[k] for k in
+                    ("max_circuit_depth", "delta_clifford", "number_sample")
+                    if k in params})
+        if "pulse_type" in params:
+            cfg["pulse_type"] = params["pulse_type"]
+
+    elif cp == "s016_state_tomography.Tomography":
+        cfg["prep_pulse_name"] = params["prep_pulse_name"]
+
+    return cfg
+
+
+# ── Background worker ─────────────────────────────────────────────────────────
 
 class AcquireWorker(QThread):
     """
     Run an experiment off the GUI thread.
-
-    In debug mode the worker calls the mock data generator instead of
-    importing and executing the real experiment class.
 
     Parameters
     ----------
@@ -30,6 +169,8 @@ class AcquireWorker(QThread):
         ``"module.ClassName"`` from EXPERIMENT_REGISTRY.
     params : dict
         Parameter dict from the experiment form.
+    qubit_cfg : dict
+        Flat hardware config from ExperimentConfig.get_qubit().
     debug : bool
         When ``True`` use synthetic data; no hardware calls are made.
     parent : QObject, optional
@@ -40,12 +181,27 @@ class AcquireWorker(QThread):
     log_message = Signal(str, str)                   # msg, level
     finished    = Signal()
 
-    def __init__(self, class_path: str, params: dict,
+    def __init__(self, class_path: str, params: dict, qubit_cfg: dict,
                  debug: bool = False, parent=None):
         super().__init__(parent)
         self.class_path = class_path
         self.params     = params
+        self.qubit_cfg  = qubit_cfg
         self.debug      = debug
+
+    # Experiments that bypass the standard sw_avg loop (custom run() signatures)
+    _SPECIAL_EXPTS = frozenset({
+        "s000_SingleShot_prog.SingleShot_gef",
+        "s000_SingleShot_opt.SingleShot_ge_opt",
+        "s015_Single_qubit_RB.RandomizedBenchmarking",
+        "s015_Auto_RB.AutoRB",
+        "s015_RB_asm.RandomizedBenchmarkingAsm",
+    })
+
+    # Experiments that use acquire_decimated (time-domain waveform, not sweep IQ)
+    _DECIMATED_EXPTS = frozenset({
+        "s001_time_of_flight.TOF",
+    })
 
     def run(self):
         name = self.class_path.split(".")[-1]
@@ -55,21 +211,98 @@ class AcquireWorker(QThread):
                 from gui.mock.runner import generate_mock_data
                 x, iq, xlabel, title = generate_mock_data(self.class_path, self.params)
                 self.data_ready.emit(x, iq, xlabel, title)
+            elif self.class_path in self._SPECIAL_EXPTS:
+                self._run_special()
             else:
-                # TODO: wire to real experiment classes
-                # import importlib
-                # mod_name, cls_name = self.class_path.rsplit(".", 1)
-                # mod  = importlib.import_module(f"qick_workspace.scrip.{mod_name}")
-                # expt = getattr(mod, cls_name)(run_cfg)
-                # expt.run(py_avg=self.params["py_avg"])
-                # self.data_ready.emit(expt._sweep_vals_x, expt.iqdata,
-                #                      expt.X_LABEL, expt.TITLE_PREFIX)
-                pass
+                self._run_liveplot()
             self.log_message.emit("Experiment complete.", "success")
         except Exception as exc:
             self.log_message.emit(f"Error: {exc}", "error")
+            self.log_message.emit(traceback.format_exc(), "error")
         finally:
             self.finished.emit()
+
+    def _make_expt(self):
+        """Instantiate the experiment class with the merged run_cfg."""
+        run_cfg = _build_run_cfg(self.class_path, self.qubit_cfg, self.params)
+        mod_name, cls_name = self.class_path.rsplit(".", 1)
+        mod  = importlib.import_module(f"qick_workspace.scrip.{mod_name}")
+        return getattr(mod, cls_name)(run_cfg)
+
+    def _run_liveplot(self):
+        """
+        Standard sw_avg loop with per-step Qt signal updates (liveplot).
+
+        Emits data_ready after every report_every averages so PlotPanel
+        refreshes in real time.  The IPython-based liveplotfun is bypassed.
+        """
+        import numpy as np
+        expt   = self._make_expt()
+        py_avg = self.params.get("py_avg", self.params.get("shots", 10))
+
+        prog   = expt._create_program()
+        x_vals = expt._extract_sweep_axis(prog)
+        expt._sweep_vals_x = x_vals
+        expt._sweep_vals_y = expt._extract_sweep_axis_y(prog)
+        soc    = expt.soc
+
+        is_decimated = self.class_path in self._DECIMATED_EXPTS
+
+        # Throttle: at most ~60 plot refreshes regardless of py_avg
+        report_every = max(1, py_avg // 60)
+
+        iq_sum  = 0
+        iqdata  = None
+        for i in range(py_avg):
+            if is_decimated:
+                # TOF: acquire_decimated returns time-domain waveform
+                # iq_list[0] has shape (ro_length_samples, 2); combine I+jQ
+                iq_list = prog.acquire_decimated(soc, rounds=1, progress=False)
+                iq_data = iq_list[0].dot([1, 1j])
+            else:
+                # Sweep experiments: iq_list[0][0] has shape (sweep_steps, 2)
+                iq_list = prog.acquire(soc, rounds=1, progress=False)
+                iq_data = iq_list[0][0].dot([1, 1j])
+            iq_sum  = iq_data if i == 0 else iq_sum + iq_data
+            iqdata  = iq_sum / (i + 1)
+
+            if (i + 1) % report_every == 0 or i == py_avg - 1:
+                self.data_ready.emit(
+                    x_vals, iqdata,
+                    expt.X_LABEL,
+                    f"{expt.TITLE_PREFIX}  [{i+1}/{py_avg}]",
+                )
+
+        expt.iqdata = iqdata
+        expt._post_fit(x_vals)
+
+    def _run_special(self):
+        """Run experiments with non-standard run() signatures (no per-step liveplot)."""
+        expt   = self._make_expt()
+        py_avg = self.params.get("py_avg", self.params.get("shots", 10))
+        cp     = self.class_path
+
+        if cp == "s000_SingleShot_prog.SingleShot_gef":
+            expt.run(py_avg, shot_f=self.params.get("shot_f", False))
+        elif cp in ("s015_Single_qubit_RB.RandomizedBenchmarking",
+                    "s015_RB_asm.RandomizedBenchmarkingAsm"):
+            expt.run(py_avg,
+                     max_circuit_depth=self.params.get("max_circuit_depth", 400),
+                     delta_clifford=self.params.get("delta_clifford", 40),
+                     number_sample=self.params.get("number_sample", 30))
+        elif cp == "s015_Auto_RB.AutoRB":
+            expt.run(py_avg,
+                     max_circuit_depth=self.params.get("max_circuit_depth", 600),
+                     delta_clifford=self.params.get("delta_clifford", 50),
+                     number_sample=self.params.get("number_sample", 50))
+        else:
+            expt.run(py_avg)
+
+        if expt.iqdata is not None and hasattr(expt, "_sweep_vals_x"):
+            self.data_ready.emit(
+                expt._sweep_vals_x, expt.iqdata,
+                expt.X_LABEL, expt.TITLE_PREFIX,
+            )
 
 
 # ── Main window ───────────────────────────────────────────────────────────────
@@ -86,6 +319,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(title)
         self.resize(1440, 860)
         self._worker: AcquireWorker | None = None
+        self._config: dict = {}
+        self._config_list: list = []
         self._browser_procs: list[QProcess] = []
         self._build_layout()
         self._connect_signals()
@@ -225,11 +460,67 @@ class MainWindow(QMainWindow):
             self.log(f"BaseExperiment.setup() failed: {exc}", "error")
 
     def _on_qubit(self, qidx: int):
-        self._lbl_qubit.setText(f"Q{qidx}")
-        self.log(f"Active qubit → Q{qidx}", "info")
+        name = self.setup_panel.active_qubit_name
+        self._lbl_qubit.setText(name)
+        self.log(f"Active qubit → {name}", "info")
 
     def _on_config(self, path: str):
-        self.log(f"Config loaded: {path}", "info")
+        try:
+            cfg, qubit_names, config_list = self._parse_config(path)
+        except Exception as exc:
+            self.log(f"Config load failed: {exc}", "error")
+            return
+        self._config = cfg
+        self._config_list = config_list
+        if qubit_names:
+            self.setup_panel.update_qubits(qubit_names)
+            self.log(f"Qubits detected: {', '.join(qubit_names)}", "info")
+            name = self.setup_panel.active_qubit_name
+            self._lbl_qubit.setText(name)
+        keys = list(cfg.keys()) if cfg else []
+        suffix = (f"  ({len(keys)} keys)" if keys
+                  else f"  ({len(qubit_names)} qubits)" if qubit_names
+                  else "")
+        self.log(f"Config loaded: {path}{suffix}", "info")
+
+    def _parse_config(self, path: str) -> tuple:
+        """Return (cfg_dict, qubit_names, config_list)."""
+        p = Path(path)
+        qubit_names: list = []
+        config_list: list = []
+        if p.suffix == ".py":
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("_gui_cfg", p)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            cfg_list = getattr(mod, "config_list", None)
+            if isinstance(cfg_list, list):
+                config_list = cfg_list
+                qubit_names = [
+                    item.get("name", f"Q{i}")
+                    for i, item in enumerate(cfg_list)
+                    if isinstance(item, dict)
+                ]
+            for name in ("config", "cfg", "hw_cfg", "expt_cfg"):
+                if hasattr(mod, name):
+                    val = getattr(mod, name)
+                    if isinstance(val, dict):
+                        return val, qubit_names, config_list
+            return ({k: v for k, v in vars(mod).items() if not k.startswith("_")},
+                    qubit_names, config_list)
+        else:
+            import yaml
+            with open(path, "r", encoding="utf-8") as f:
+                data = yaml.safe_load(f) or {}
+            if isinstance(data, list):
+                config_list = data
+                qubit_names = [
+                    item.get("name", f"Q{i}")
+                    for i, item in enumerate(data)
+                    if isinstance(item, dict)
+                ]
+                return {}, qubit_names, config_list
+            return data, qubit_names, config_list
 
     def _auto_connect_mock(self):
         """Fire a simulated connection immediately on startup in debug mode."""
@@ -242,7 +533,20 @@ class MainWindow(QMainWindow):
         if self._worker and self._worker.isRunning():
             self.log("Already running — stop first.", "warn")
             return
-        self._worker = AcquireWorker(class_path, params, self._debug, self)
+
+        qubit_cfg: dict = {}
+        if not self._debug and self._config_list:
+            try:
+                from qick_workspace.tools.system_tool import ExperimentConfig
+                config_all = ExperimentConfig(self._config_list)
+                active_qubit = self.setup_panel.active_qubit_name
+                qubit_cfg = dict(config_all.get_qubit(active_qubit))
+            except Exception as exc:
+                self.log(f"Could not build qubit config: {exc}", "warn")
+        elif not self._debug and not self._config_list:
+            self.log("No config loaded — Browse and Load a config file first.", "warn")
+
+        self._worker = AcquireWorker(class_path, params, qubit_cfg, self._debug, self)
         self._worker.log_message.connect(self.log)
         self._worker.data_ready.connect(self.plot_panel.update_data)
         self._worker.finished.connect(self._on_worker_done)

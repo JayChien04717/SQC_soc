@@ -92,6 +92,11 @@ class BaseExperiment:
     # "real" → np.real(iqdata) — use after readout optimization (best SNR on I axis)
     IQ_PROCESS: str = "abs"
 
+    # ── Yokogawa ramp settings ──
+    YOKO_VOLTAGE_RAMP_STEP: float = 1e-5   # V per step
+    YOKO_CURRENT_RAMP_STEP: float = 1e-8   # A per step
+    YOKO_RAMP_INTERVAL: float = 0.01       # s between steps
+
     # ── x-axis save info (for saveLabber) ──
     X_SAVE_NAME: str = ""  # e.g. "Frequency", "Times", "Gain"
     X_SAVE_UNIT: str = ""  # e.g. "Hz", "us", "DAC unit"
@@ -117,6 +122,7 @@ class BaseExperiment:
         self.fit_params = None
         self._sweep_vals = None  # sweep axis values (x)
         self._sweep_vals_y = None  # sweep axis values (y, for 2D)
+        self._yoko_mode = None
 
     # ══════════════════════════════════════════════
     # Unified entry point
@@ -154,9 +160,19 @@ class BaseExperiment:
         if iq_process is not None:
             self.IQ_PROCESS = iq_process
 
+        self._yoko_mode = kwargs.get("yoko_mode", None)
         prog = self._create_program()
         self._sweep_vals_x = self._extract_sweep_axis(prog)
         self._sweep_vals_y = self._extract_sweep_axis_y(prog)
+
+        # Allow yoko_value passed to run() to override cfg-based y-axis
+        yoko_value_kwarg = kwargs.get("yoko_value")
+        if yoko_value_kwarg is not None:
+            import numpy as _np
+            self._sweep_vals_y = _np.asarray(yoko_value_kwarg)
+
+        # Accept yoko_inst as alias for yoko_inst_addr
+        yoko_addr = kwargs.get("yoko_inst_addr") or kwargs.get("yoko_inst")
 
         self.iqdata, interrupted, avg_count = liveplotfun(
             prog=prog,
@@ -167,8 +183,11 @@ class BaseExperiment:
             x_label=self.X_LABEL,
             y_label=self.Y_LABEL,
             title_prefix=self.TITLE_PREFIX,
-            yoko_inst_addr=kwargs.get("yoko_inst_addr"),
+            yoko_inst_addr=yoko_addr,
             yoko_mode=kwargs.get("yoko_mode", "current"),
+            yoko_voltage_ramp_step=self.YOKO_VOLTAGE_RAMP_STEP,
+            yoko_current_ramp_step=self.YOKO_CURRENT_RAMP_STEP,
+            yoko_ramp_interval=self.YOKO_RAMP_INTERVAL,
             show_final_plot=show_final_plot,
             iq_process=self.IQ_PROCESS,
         )

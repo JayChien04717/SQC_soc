@@ -8,10 +8,12 @@ from typing import Union, Tuple
 ON_OFF_MAP = {
     "on": "1",
     "1": "1",
+    "true": "1",
     1: "1",
     True: "1",
     "off": "0",
     "0": "0",
+    "false": "0",
     0: "0",
     False: "0",
 }
@@ -95,6 +97,22 @@ class AnritsuMG3692:
             self.instrument.close()
             self.rm.close()
 
+    def reconnect(self) -> None:
+        """Re-open the VISA session after a connection loss."""
+        print(f"[mg3692] Reconnecting to {self.resource_name} ...")
+        try:
+            try:
+                self.instrument.close()
+            except Exception:
+                pass
+            self.instrument = self.rm.open_resource(self.resource_name)
+            self.instrument.timeout = 5000
+            self.instrument.read_termination  = "\n"
+            self.instrument.write_termination = "\n"
+            print("[mg3692] Reconnected.")
+        except pyvisa.Error as e:
+            raise ConnectionError(f"[mg3692] Reconnect failed: {e}") from e
+
     def write(self, cmd: str) -> None:
         """
         Sends a SCPI write command.
@@ -109,7 +127,14 @@ class AnritsuMG3692:
         None
         """
         if self.instrument:
-            self.instrument.write(cmd)
+            try:
+                self.instrument.write(cmd)
+            except pyvisa.errors.VisaIOError as e:
+                if e.error_code == pyvisa.constants.StatusCode.error_connection_lost:
+                    self.reconnect()
+                    self.instrument.write(cmd)
+                else:
+                    raise
 
     def query(self, cmd: str) -> str:
         """
@@ -126,7 +151,14 @@ class AnritsuMG3692:
             The response string from the instrument.
         """
         if self.instrument:
-            return self.instrument.query(cmd).strip()
+            try:
+                return self.instrument.query(cmd).strip()
+            except pyvisa.errors.VisaIOError as e:
+                if e.error_code == pyvisa.constants.StatusCode.error_connection_lost:
+                    self.reconnect()
+                    return self.instrument.query(cmd).strip()
+                else:
+                    raise
         return ""
 
     def check_error(self) -> str:
@@ -171,8 +203,8 @@ class AnritsuMG3692:
             If the requested parameter has no defined limits in the driver.
         """
         limits = {
-            "frequency": (2e9, 20e9),  # Example standard limits for MG3692
-            "power": (-120, 10),       # Example standard power limits
+            "frequency": (2e9, 20e9),  # MG3692 standard range
+            "power": (-120, 27),       # MG3692 max output +27 dBm
         }
         param_lower = parameter.lower()
         if param_lower in limits:
@@ -330,29 +362,32 @@ class AnritsuMG3692:
         """
         self._map_and_write("OUTP {}", value, "status")
 
-    def on(self) -> None:
+    def output(self, state: Union[bool, None] = None) -> Union[bool, None]:
         """
-        Turns the RF output on explicitly.
+        Get or set the RF output state.
 
-        A convenience shortcut to modify the status property.
+        Parameters
+        ----------
+        state : bool or None
+            True to turn on, False to turn off.
+            If None, returns the current output state as bool.
 
         Returns
         -------
-        None
+        bool or None
+            Current output state (True=on, False=off) when called with no argument.
         """
-        self.status = "on"
+        if state is None:
+            return self.status == "on"
+        self.status = state
+
+    def on(self) -> None:
+        """Turns the RF output on (kept for backwards compatibility)."""
+        self.output(True)
 
     def off(self) -> None:
-        """
-        Turns the RF output off explicitly.
-
-        A convenience shortcut to modify the status property.
-
-        Returns
-        -------
-        None
-        """
-        self.status = "off"
+        """Turns the RF output off (kept for backwards compatibility)."""
+        self.output(False)
 
 # Alias for backwards compatibility
 MG3692Driver = AnritsuMG3692

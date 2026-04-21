@@ -49,6 +49,7 @@ class SetupPanel(QWidget):
         self._worker: _ConnectWorker | None = None
         self.soc     = None
         self.soccfg  = None
+        self._qubit_names: list[str] = [f"Q{i}" for i in range(4)]
         self._build_ui()
 
     def _build_ui(self):
@@ -164,8 +165,8 @@ class SetupPanel(QWidget):
 
         row = QHBoxLayout()
         self.config_path = QLineEdit()
-        self.config_path.setPlaceholderText("config.yaml")
-        self.config_path.setToolTip("Path to experiment config YAML file")
+        self.config_path.setPlaceholderText("config.yaml / config.py")
+        self.config_path.setToolTip("Path to experiment config file (.yaml or .py)")
         row.addWidget(self.config_path)
         browse_btn = QPushButton("Browse…")
         browse_btn.setFixedWidth(70)
@@ -175,7 +176,7 @@ class SetupPanel(QWidget):
 
         btn_row = QHBoxLayout()
         load_btn = QPushButton("Load Config")
-        load_btn.setToolTip("Load and apply the YAML config")
+        load_btn.setToolTip("Load and apply config (.yaml or .py)")
         load_btn.clicked.connect(self._load_config)
         save_btn = QPushButton("Save Config")
         save_btn.setToolTip("Save current config to YAML")
@@ -199,7 +200,7 @@ class SetupPanel(QWidget):
     def _browse_config(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Select Config", "",
-            "YAML files (*.yaml *.yml);;All files (*)")
+            "Config files (*.yaml *.yml *.py);;YAML files (*.yaml *.yml);;Python files (*.py);;All files (*)")
         if path:
             self.config_path.setText(path)
 
@@ -221,18 +222,12 @@ class SetupPanel(QWidget):
         lay.setSpacing(6)
 
         self._qubit_bg = QButtonGroup(self)
-        qrow = QHBoxLayout()
-        for i in range(4):
-            rb = QRadioButton(f"Q{i}")
-            rb.setToolTip(f"Set active qubit to Q{i}")
-            if i == 0:
-                rb.setChecked(True)
-            self._qubit_bg.addButton(rb, i)
-            qrow.addWidget(rb)
+        self._qubit_row = QHBoxLayout()
+        lay.addLayout(self._qubit_row)
+        self._rebuild_qubit_buttons()
         self._qubit_bg.idToggled.connect(
             lambda qid, checked: self.qubit_changed.emit(qid) if checked else None
         )
-        lay.addLayout(qrow)
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Yoko (mA):"))
@@ -245,11 +240,36 @@ class SetupPanel(QWidget):
         lay.addLayout(row)
         return grp
 
+    def _rebuild_qubit_buttons(self):
+        for btn in list(self._qubit_bg.buttons()):
+            self._qubit_bg.removeButton(btn)
+            self._qubit_row.removeWidget(btn)
+            btn.setParent(None)
+        for i, name in enumerate(self._qubit_names):
+            rb = QRadioButton(name)
+            rb.setToolTip(f"Set active qubit to {name}")
+            if i == 0:
+                rb.setChecked(True)
+            self._qubit_bg.addButton(rb, i)
+            self._qubit_row.addWidget(rb)
+
+    def update_qubits(self, names: list):
+        """Rebuild qubit radio buttons from loaded config qubit names."""
+        self._qubit_names = list(names)
+        self._rebuild_qubit_buttons()
+
     # ── Properties ────────────────────────────────────────────────────────────
 
     @property
     def active_qubit(self) -> int:
         return self._qubit_bg.checkedId()
+
+    @property
+    def active_qubit_name(self) -> str:
+        qid = self._qubit_bg.checkedId()
+        if 0 <= qid < len(self._qubit_names):
+            return self._qubit_names[qid]
+        return f"Q{qid}"
 
     @property
     def data_folder(self) -> str:

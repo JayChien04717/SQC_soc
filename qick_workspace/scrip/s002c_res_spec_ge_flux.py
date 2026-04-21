@@ -78,6 +78,14 @@ class ResonatorSpecFlux(BaseExperiment):
         """Return the resonator frequency sweep axis in MHz."""
         return prog.get_pulse_param("res_pulse", "freq", as_array=True)
 
+    def saveLabber(self, qb_idx, config_all=None, title=None, **kwargs):
+        if self._yoko_mode == "voltage":
+            self.Y_SAVE_UNIT = "V"
+        elif self._yoko_mode == "current":
+            self.Y_SAVE_UNIT = "A"
+        # if _yoko_mode is None (DAC flux), Y_SAVE_UNIT stays as class default
+        super().saveLabber(qb_idx, yoko_value=None, config_all=config_all, title=title)
+
     def _extract_sweep_axis_y(self, prog):
         """
         Return the flux sweep axis.

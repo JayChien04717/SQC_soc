@@ -30,6 +30,9 @@ def liveplotfun(
     # --- Yoko-specific parameters ---
     yoko_inst_addr=None,
     yoko_mode="current",
+    yoko_voltage_ramp_step=1e-5,
+    yoko_current_ramp_step=1e-8,
+    yoko_ramp_interval=0.01,
     # --- Parameter Scan specific ---
     scan_x_axis=None,  # If provided, enables parameter scan mode
     scan_y_axis=None,  # If provided alongside scan_x_axis, enables 2D parameter scan mode
@@ -120,6 +123,9 @@ def liveplotfun(
             y_axis_vals_yoko=y_axis_vals,
             yoko_inst_addr=yoko_inst_addr,
             yoko_mode=yoko_mode,
+            yoko_voltage_ramp_step=yoko_voltage_ramp_step,
+            yoko_current_ramp_step=yoko_current_ramp_step,
+            yoko_ramp_interval=yoko_ramp_interval,
             x_label=x_label,
             y_label=y_label,
             title_prefix=title_prefix,
@@ -396,6 +402,9 @@ def _liveplot_sweep_yoko(
     y_axis_vals_yoko,
     yoko_inst_addr,
     yoko_mode="current",
+    yoko_voltage_ramp_step=1e-5,
+    yoko_current_ramp_step=1e-8,
+    yoko_ramp_interval=0.01,
     x_label="X Axis",
     y_label="Y Axis",
     title_prefix="Experiment",
@@ -446,6 +455,9 @@ def _liveplot_sweep_yoko(
 
     rm = pyvisa.ResourceManager()
     yoko = YOKOGS200(yoko_inst_addr, rm)
+    yoko.voltage_ramp_step = yoko_voltage_ramp_step
+    yoko.current_ramp_step = yoko_current_ramp_step
+    yoko.ramp_interval = yoko_ramp_interval
 
     iqdata_full = np.zeros((len(y_axis_vals_yoko), len(x_axis_vals)), dtype=complex)
     data_to_plot = np.zeros((len(y_axis_vals_yoko), len(x_axis_vals)))
@@ -459,13 +471,17 @@ def _liveplot_sweep_yoko(
         value_info = auto_unit(y_axis_vals_yoko, yoko_unit)
         plot_x_vals = value_info["value"]
         dynamic_x_label = f"{y_label} ({value_info['unit']})"
-
         current_yoko_unit = value_info["unit"]
     except NameError:
         plot_x_vals = y_axis_vals_yoko
         dynamic_x_label = y_label
         current_yoko_unit = yoko_unit
-
+    print(
+        f"Yoko sweep mode: {yoko_mode} | unit: {current_yoko_unit} | "
+        f"V_step: {yoko.voltage_ramp_step:.2e} V  "
+        f"I_step: {yoko.current_ramp_step:.2e} A  "
+        f"interval: {yoko.ramp_interval * 1e3:.1f} ms"
+    )
     plot_y_vals = x_axis_vals
     dynamic_y_label = x_label
 
