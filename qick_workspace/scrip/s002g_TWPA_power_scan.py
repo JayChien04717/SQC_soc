@@ -30,9 +30,18 @@ import datetime
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 
-from .s002d_TWPA_flux import TWPAFlux
+try:
+    from IPython.display import display as ipy_display, update_display as ipy_update
+
+    _HAS_IPY = True
+except ImportError:
+    _HAS_IPY = False
+
+import pyvisa
+from .s002d_TWPA_flux import TWPAFluxProgram
 from .base_experiment import BaseExperiment
 from ..tools.electrical_length import set_units_on_plot_axis
+from ..tools.YOKOGS200 import YOKOGS200
 
 
 class TWPAPowerScan:
@@ -64,7 +73,7 @@ class TWPAPowerScan:
         self.pump_powers = np.asarray(pump_powers, dtype=float)
         self.flux_value = float(flux_value)
 
-        self._slices = []          # list of DataArray (frequency,) per power step
+        self._slices = []  # list of DataArray (frequency,) per power step
         self._collected_powers = []
         self._yoko_mode = None
         self._stop = False
@@ -83,8 +92,6 @@ class TWPAPowerScan:
         py_avg,
         yoko_inst,
         yoko_mode="current",
-        save_raw=False,
-        qb_idx="TWPA",
         temp_folder=None,
         reference=None,
         **kwargs,
@@ -114,14 +121,69 @@ class TWPAPowerScan:
         self._collected_powers = []
         self._stop = False
 
-        yoko_arr = np.array([self.flux_value])
-
+        ## Setup yoko ##
+        _rm = pyvisa.ResourceManager()
+        _yoko = YOKOGS200(yoko_inst, _rm)
+        _yoko.voltage_ramp_step = self.YOKO_VOLTAGE_RAMP_STEP
+        _yoko.current_ramp_step = self.YOKO_CURRENT_RAMP_STEP
+        _yoko.ramp_interval = self.YOKO_RAMP_INTERVAL
+        if yoko_mode == "current":
+            _yoko.SetMode("current")
+            _yoko.SetCurrent(self.flux_value)
+        elif yoko_mode == "voltage":
+            _yoko.SetMode("voltage")
+            _yoko.SetVoltage(self.flux_value)
+        else:
+            raise ValueError(
+                f"Invalid yoko_mode: {yoko_mode}. Must be 'current' or 'voltage'."
+            )
+        ## setup pump ##
         self.pump.frequency = self.pump_freq
         self.pump.on()
         print(
             f"Pump ON  | freq = {self.pump_freq / 1e9:.4f} GHz"
             f" | flux = {self.flux_value * 1e3:.4f} mA"
         )
+
+        # Precompute reference row for live gain display
+        _ref_row = None
+        if reference is not None:
+            try:
+                _ref_s21 = reference._build_s21_xarray()
+                _smallest = float(np.abs(_ref_s21["ifbl"]).min())
+                _ref_row = _ref_s21.sel(ifbl=_smallest).drop_vars("ifbl")
+            except Exception:
+                _ref_row = None
+
+        # Live plot setup
+        _cmap = plt.cm.viridis
+        _cnorm = plt.Normalize(self.pump_powers.min(), self.pump_powers.max())
+        _fig_live, _ax_live = plt.subplots(figsize=(9, 5))
+        _ax_live.set_xlabel("Frequency (GHz)")
+        _ax_live.set_ylabel("Gain (dB)" if _ref_row is not None else "Amplitude")
+        _ax_live.set_title(
+            f"TWPA Power Scan (running…)\n"
+            f"pump_freq = {self.pump_freq / 1e9:.4f} GHz"
+            f"  |  flux = {self.flux_value * 1e3:.4f} mA"
+        )
+        _ax_live.grid(True, alpha=0.3)
+        _sm = plt.cm.ScalarMappable(cmap=_cmap, norm=_cnorm)
+        _sm.set_array([])
+        _fig_live.colorbar(_sm, ax=_ax_live, label="Pump power (dBm)")
+        _fig_live.tight_layout()
+        _live_id = f"twpa-ps-live-{np.random.randint(int(1e9))}"
+        if _HAS_IPY:
+            ipy_display(_fig_live, display_id=_live_id)
+
+        # Build QICK program once — config is identical for every power step
+        _soc = BaseExperiment._soc
+        _prog = TWPAFluxProgram(
+            BaseExperiment._soccfg,
+            reps=self.run_cfg["reps"],
+            final_delay=self.run_cfg["relax_delay"],
+            cfg=self.run_cfg,
+        )
+        _freq_hz = _prog.get_pulse_param("res_pulse", "freq", as_array=True) * 1e6
 
         try:
             for pp in tqdm(self.pump_powers, desc="pump_power sweep"):
@@ -133,31 +195,54 @@ class TWPAPowerScan:
                 self.pump.power = pp
 
                 try:
-                    exp = TWPAFlux(self.run_cfg)
-                    exp.YOKO_VOLTAGE_RAMP_STEP = self.YOKO_VOLTAGE_RAMP_STEP
-                    exp.YOKO_CURRENT_RAMP_STEP = self.YOKO_CURRENT_RAMP_STEP
-                    exp.YOKO_RAMP_INTERVAL = self.YOKO_RAMP_INTERVAL
-                    exp.run(
-                        py_avg,
-                        yoko_inst=yoko_inst,
-                        yoko_value=yoko_arr,
-                        yoko_mode=yoko_mode,
-                    )
+                    iq_list = _prog.acquire(_soc, rounds=py_avg, progress=False)
                 except KeyboardInterrupt:
-                    tqdm.write("\nKeyboardInterrupt — saving collected data and stopping.")
+                    tqdm.write(
+                        "\nKeyboardInterrupt — saving collected data and stopping."
+                    )
                     self._stop = True
                     break
 
-                # _build_s21_xarray returns (ifbl, frequency); squeeze single flux point
-                s21 = exp._build_s21_xarray()  # (ifbl=1, frequency)
-                s21_1d = s21.isel(ifbl=0).drop_vars("ifbl")  # (frequency,)
-                s21_1d = s21_1d.assign_coords(pump_power=pp)
+                iq_data = iq_list[0][0].dot([1, 1j])  # (freq_steps,) complex
+                s21_1d = xr.DataArray(
+                    iq_data,
+                    dims=["frequency"],
+                    coords={"frequency": _freq_hz, "pump_power": pp},
+                )
                 self._slices.append(s21_1d)
                 self._collected_powers.append(pp)
 
-                if save_raw:
-                    title = f"power_{pp:+.1f}dBm"
-                    exp.saveLabber(qb_idx, title=title)
+                # Update live plot
+                _ax_live.cla()
+                _ax_live.set_xlabel("Frequency (GHz)")
+                _ax_live.set_ylabel(
+                    "Gain (dB)" if _ref_row is not None else "Amplitude"
+                )
+                _ax_live.set_title(
+                    f"TWPA Power Scan  [{len(self._collected_powers)}/{len(self.pump_powers)}]"
+                    f"  —  latest: {pp:+.1f} dBm\n"
+                    f"pump_freq = {self.pump_freq / 1e9:.4f} GHz"
+                    f"  |  flux = {self.flux_value * 1e3:.4f} mA"
+                )
+                _ax_live.grid(True, alpha=0.3)
+                for _pp, _sl in zip(self._collected_powers, self._slices):
+                    _freq = _sl["frequency"].values / 1e9
+                    if _ref_row is not None:
+                        _y = 20 * np.log10(np.abs(_sl.values / _ref_row.values))
+                    else:
+                        _y = np.abs(_sl.values)
+                    _is_latest = _pp == pp
+                    _ax_live.plot(
+                        _freq,
+                        _y,
+                        color=_cmap(_cnorm(_pp)),
+                        lw=1.2 if _is_latest else 0.8,
+                        alpha=1.0 if _is_latest else 0.6,
+                    )
+                if _HAS_IPY:
+                    ipy_update(_fig_live, display_id=_live_id)
+                else:
+                    plt.pause(0.01)
 
                 if temp_folder is not None:
                     self.saveNetCDF(
@@ -309,6 +394,14 @@ class TWPAPowerScan:
 
         freq_ghz = gain_db["frequency"].values / 1e9
         powers = gain_db["pump_power"].values
+        freq = gain_db["frequency"].values
+        band_mask = (freq >= f_min) & (freq <= f_max)
+
+        # Precompute median gain within band for each power
+        medians = {}
+        for pp in powers:
+            g_band = gain_db.sel(pump_power=pp).values[band_mask]
+            medians[pp] = float(np.nanmedian(g_band)) if g_band.size else float("nan")
 
         cmap = plt.cm.viridis
         cnorm = plt.Normalize(powers.min(), powers.max())
@@ -317,7 +410,8 @@ class TWPAPowerScan:
 
         for pp in powers:
             curve = gain_db.sel(pump_power=pp).values
-            ax.plot(freq_ghz, curve, color=cmap(cnorm(pp)), lw=0.9)
+            lbl = f"{pp:.0f} dBm  median {medians[pp]:.1f} dB"
+            ax.plot(freq_ghz, curve, color=cmap(cnorm(pp)), lw=0.9, label=lbl)
 
         sm = plt.cm.ScalarMappable(cmap=cmap, norm=cnorm)
         fig.colorbar(sm, ax=ax, label="Pump power (dBm)")
@@ -339,22 +433,21 @@ class TWPAPowerScan:
         )
         ax.legend(fontsize=8)
         ax.grid(True, alpha=0.3)
-        set_units_on_plot_axis(ax.xaxis, 1e9, "GHz", decimals=1)
         fig.tight_layout()
         plt.show()
 
-        # Print gain at band edges and peak for each power
-        freq = gain_db["frequency"].values
-        band_mask = (freq >= f_min) & (freq <= f_max)
-        print(f"\n=== Gain summary  (pump_freq = {self.pump_freq / 1e9:.4f} GHz,"
-              f"  flux = {self.flux_value * 1e3:.4f} mA) ===")
-        print(f"  {'Power (dBm)':>12}  {'Peak gain (dB)':>15}  {'Median gain (dB)':>17}")
+        # Print gain summary (band_mask and medians already computed above)
+        print(
+            f"\n=== Gain summary  (pump_freq = {self.pump_freq / 1e9:.4f} GHz,"
+            f"  flux = {self.flux_value * 1e3:.4f} mA) ==="
+        )
+        print(
+            f"  {'Power (dBm)':>12}  {'Peak gain (dB)':>15}  {'Median gain (dB)':>17}"
+        )
         print("-" * 50)
         for pp in powers:
-            g = gain_db.sel(pump_power=pp).values
-            g_band = g[band_mask]
+            g_band = gain_db.sel(pump_power=pp).values[band_mask]
             peak = float(np.nanmax(g_band)) if g_band.size else float("nan")
-            median = float(np.nanmedian(g_band)) if g_band.size else float("nan")
-            print(f"  {pp:>12.1f}  {peak:>15.2f}  {median:>17.2f}")
+            print(f"  {pp:>12.1f}  {peak:>15.2f}  {medians[pp]:>17.2f}")
 
         return gain_db

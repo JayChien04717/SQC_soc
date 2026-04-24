@@ -73,7 +73,7 @@ class TWPAFlux(BaseExperiment):
     EXPT_NAME = "TWPA_flux"
     TAG = "TWPA"
     X_LABEL = "Frequency (MHz)"
-    Y_LABEL = "Flux (A)"
+    Y_LABEL = "Flux"
     TITLE_PREFIX = "TWPA Flux Spectroscopy"
     SWEEP_KEYS_TO_REMOVE = ["res_freq_ge", "flux_gain"]
 

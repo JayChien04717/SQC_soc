@@ -551,32 +551,36 @@ def _liveplot_sweep_yoko(
         print(f"KeyboardInterrupt: Interrupted at Yoko step: {last_idx + 1}")
 
     ax.cla()
-    if interrupted:
-        ax.set_title(f"{title_prefix} (Interrupted at step {last_idx + 1})")
+    title_status = f"Interrupted at step {last_idx + 1}" if interrupted else "Completed"
+    ax.set_title(f"{title_prefix} ({title_status})")
+
+    # When only one Yoko value, show a 1D frequency spectrum instead of a heatmap
+    if len(y_axis_vals_yoko) == 1:
+        row = data_to_plot[0, :]
+        ax.plot(plot_y_vals, row, lw=1.0)
+        ax.set_xlabel(dynamic_y_label)
+        ax.set_ylabel("Amplitude")
     else:
-        ax.set_title(f"{title_prefix} (Completed)")
+        ax.set_xlabel(dynamic_x_label)
+        ax.set_ylabel(dynamic_y_label)
 
-    ax.set_xlabel(dynamic_x_label)
-    ax.set_ylabel(dynamic_y_label)
+        measured_data_final = (
+            data_to_plot[: last_idx + 1, :] if interrupted else data_to_plot
+        )
+        final_min = np.min(measured_data_final) if measured_data_final.size > 0 else 0
+        final_max = np.max(measured_data_final) if measured_data_final.size > 0 else 1
+        if final_min == final_max:
+            final_min = 0
 
-    # Use final measured min/max for the static plot too
-    measured_data_final = (
-        data_to_plot[: last_idx + 1, :] if interrupted else data_to_plot
-    )
-    final_min = np.min(measured_data_final) if measured_data_final.size > 0 else 0
-    final_max = np.max(measured_data_final) if measured_data_final.size > 0 else 1
-    if final_min == final_max:
-        final_min = 0
-
-    im = ax.pcolormesh(
-        plot_x_vals,
-        plot_y_vals,
-        data_to_plot.T,
-        shading="nearest",
-        vmin=final_min,
-        vmax=final_max,
-    )
-    fig.colorbar(im, ax=ax, label="Amplitude")
+        im = ax.pcolormesh(
+            plot_x_vals,
+            plot_y_vals,
+            data_to_plot.T,
+            shading="nearest",
+            vmin=final_min,
+            vmax=final_max,
+        )
+        fig.colorbar(im, ax=ax, label="Amplitude")
 
     display(fig)
     plt.close(fig)
