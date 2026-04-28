@@ -6,15 +6,11 @@ including exponential decays, sinusoids, Lorentzians, and more specialized funct
 Hanger resonator fits and randomized benchmarking.
 """
 
-import numpy as np
-import scipy as sp
 import traceback
-from typing import Tuple, List, Optional, Callable, Dict, Any, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import scipy as sp
-from typing import Tuple, List, Optional, Callable, Dict, Any
-
 
 # ====================================================== #
 # Utility Functions
@@ -71,17 +67,18 @@ def fix_phase(p: List[float]) -> Tuple[float, float]:
     pi2_gain : float
         Gain value for a pi/2 rotation.
     """
-    if p[2] > 180:
-        p[2] -= 360
-    elif p[2] < -180:
-        p[2] += 360
+    phase = p[2]
+    if phase > 180:
+        phase -= 360
+    elif phase < -180:
+        phase += 360
 
-    if p[2] < 0:
-        pi_gain = (1 / 2 - p[2] / 180) / 2 / p[1]
-        pi2_gain = (0 - p[2] / 180) / 2 / p[1]
+    if phase < 0:
+        pi_gain  = (1 / 2 - phase / 180) / 2 / p[1]
+        pi2_gain = (0     - phase / 180) / 2 / p[1]
     else:
-        pi_gain = (3 / 2 - p[2] / 180) / 2 / p[1]
-        pi2_gain = (1 - p[2] / 180) / 2 / p[1]
+        pi_gain  = (3 / 2 - phase / 180) / 2 / p[1]
+        pi2_gain = (1     - phase / 180) / 2 / p[1]
     return pi_gain, pi2_gain
 
 
@@ -167,8 +164,12 @@ def validate_bounds(
     """
     fitparams = list(fitparams)
     for i, (param, lo, hi) in enumerate(zip(fitparams, bounds[0], bounds[1])):
-        if not (lo < param < hi):
-            fitparams[i] = (lo + hi) / 2
+        below = np.isfinite(lo) and param <= lo
+        above = np.isfinite(hi) and param >= hi
+        if below or above:
+            lo_safe = lo if np.isfinite(lo) else param - 1
+            hi_safe = hi if np.isfinite(hi) else param + 1
+            fitparams[i] = (lo_safe + hi_safe) / 2
             print(
                 f"fitparam[{i}]={param:.4g} out of bounds [{lo:.4g}, {hi:.4g}]"
                 f" → reset to {fitparams[i]:.4g}"
@@ -464,134 +465,6 @@ def get_best_fit(
 
 
 # ====================================================== #
-# Phase Correction and Initialization Functions
-# ====================================================== #
-
-
-def fix_phase(p: List[float]) -> Tuple[float, float]:
-    """
-    Normalize phase and calculate pi and pi/2 gains from sinusoidal fit parameters.
-
-    Wraps p[2] into [-180, 180] degrees and computes the gain values
-    corresponding to a pi rotation and a pi/2 rotation.
-
-    Parameters
-    ----------
-    p : list of float
-        Fit parameters ``[yscale, freq, phase_deg, y0]`` from a sinusoidal fit.
-
-    Returns
-    -------
-    pi_gain : float
-        Gain value for a pi rotation.
-    pi2_gain : float
-        Gain value for a pi/2 rotation.
-    """
-    if p[2] > 180:
-        p[2] = p[2] - 360
-    elif p[2] < -180:
-        p[2] = p[2] + 360
-
-    if p[2] < 0:
-        pi_gain = (1 / 2 - p[2] / 180) / 2 / p[1]
-        pi2_gain = (0 - p[2] / 180) / 2 / p[1]
-    else:
-        pi_gain = (3 / 2 - p[2] / 180) / 2 / p[1]
-        pi2_gain = (1 - p[2] / 180) / 2 / p[1]
-    return pi_gain, pi2_gain
-
-
-def fourier_init(
-    xdata: np.ndarray, ydata: np.ndarray, debug: bool = False
-) -> Tuple[float, float]:
-    """
-    Estimate oscillation frequency and phase using a full complex FFT.
-
-    Subtracts the mean from ydata, computes the FFT, and returns the
-    frequency and phase of the dominant positive-frequency component.
-
-    Parameters
-    ----------
-    xdata : np.ndarray
-        Uniformly spaced x-axis values.
-    ydata : np.ndarray
-        Signal values corresponding to xdata.
-    debug : bool, optional
-        If True, displays a two-panel plot of FFT magnitude and phase.
-        Default is False.
-
-    Returns
-    -------
-    max_freq : float
-        Frequency of the dominant spectral component.
-    max_phase : float
-        Phase (radians) of the dominant spectral component.
-    """
-    ydata = ydata - np.mean(ydata)
-    fourier = np.fft.fft(ydata)
-    fft_freqs = np.fft.fftfreq(len(ydata), d=xdata[1] - xdata[0])
-    fft_phases = np.angle(fourier)
-
-    half_N = len(ydata) // 2
-    mag = np.abs(fourier[1:half_N])
-    phase = fft_phases[1:half_N]
-    freqs = fft_freqs[1:half_N]
-
-    max_ind = np.argmax(mag)
-    max_freq = freqs[max_ind]
-    max_phase = phase[max_ind]
-
-    if debug:
-        import matplotlib.pyplot as plt
-
-        fig, ax = plt.subplots(2, 1, sharex=True, figsize=(4, 6))
-
-        ax[0].plot(freqs, mag, ".")
-        ax[1].set_xlabel("Frequency (MHz)")
-        ax[0].set_ylabel("Amplitude")
-
-        ax[1].plot(freqs, phase * 180 / np.pi, ".")
-        ax[1].plot(max_freq, max_phase * 180 / np.pi, "ro")
-        ax[1].set_ylabel("Phase (deg)")
-
-        print(f"Max phase is {max_phase}")
-        print(f"Max freq is {max_freq}")
-        plt.show()
-
-    return max_freq, max_phase
-
-
-def validate_bounds(
-    fitparams: List[float], bounds: Tuple[List[float], List[float]]
-) -> List[float]:
-    """
-    Validate that initial fit parameters lie within specified bounds.
-
-    Any parameter outside its bounds is reset to the midpoint of the
-    corresponding interval, and a warning is printed.
-
-    Parameters
-    ----------
-    fitparams : list of float
-        Initial parameter estimates to validate.
-    bounds : tuple of (list of float, list of float)
-        ``(lower_bounds, upper_bounds)`` with one entry per parameter.
-
-    Returns
-    -------
-    fitparams : list of float
-        Validated parameter list with out-of-bounds values replaced.
-    """
-    for i, param in enumerate(fitparams):
-        if not (bounds[0][i] < param < bounds[1][i]):
-            fitparams[i] = np.mean((bounds[0][i], bounds[1][i]))
-            print(
-                f"Attempted to init fitparam {i} to {param}, which is out of bounds {bounds[0][i]} to {bounds[1][i]}. Instead init to {fitparams[i]}"
-            )
-    return fitparams
-
-
-# ====================================================== #
 # Exponential Fit Functions
 # ====================================================== #
 
@@ -808,7 +681,7 @@ def fit_asym_lor(xdata, ydata, fitparams=None):
     if fitparams is None:
         fitparams = [None] * 5
     else:
-        fitparams = np.copy(fitparams)
+        fitparams = list(fitparams)
 
     if fitparams[0] is None:
         fitparams[0] = (ydata[0] + ydata[-1]) / 2
@@ -821,13 +694,13 @@ def fit_asym_lor(xdata, ydata, fitparams=None):
     if fitparams[4] is None:
         fitparams[4] = 0
 
-    pOpt = fitparams
-    pCov = np.full(shape=(len(fitparams), len(fitparams)), fill_value=np.inf)
-    try:
-        pOpt, pCov = sp.optimize.curve_fit(asym_lorfunc, xdata, ydata, p0=fitparams)
-    except RuntimeError:
-        print("Warning: fit failed!")
-    return pOpt, pCov
+    return generic_fit(
+        asym_lorfunc,
+        xdata,
+        ydata,
+        fitparams,
+        error_message="Warning: Fit asymmetric Lorentzian failed!",
+    )
 
 
 # ====================================================== #
@@ -1262,7 +1135,7 @@ def fittwofreq_decaysin(
         fitparams,
         bounds=bounds,
         error_message="Warning: Fit two-frequency decaying sine failed!",
-    )[:2]  # Return only pOpt and pCov
+    )  # Return only pOpt and pCov
 
 
 # ====================================================== #
@@ -1320,7 +1193,8 @@ def fit_gauss(xdata, ydata, fitparams=None):
     if fitparams is None:
         fitparams = [None] * 4
     else:
-        fitparams = np.copy(fitparams)
+        fitparams = list(fitparams)
+
     if fitparams[0] is None:
         fitparams[0] = np.max(ydata)
     if fitparams[1] is None:
@@ -1329,32 +1203,20 @@ def fit_gauss(xdata, ydata, fitparams=None):
         fitparams[2] = (np.max(xdata) - np.min(xdata)) / 8
     if fitparams[3] is None:
         fitparams[3] = np.min(ydata)
-    pOpt = fitparams
-    # print('fitparams guess:', fitparams)
-    pCov = np.full(shape=(len(fitparams), len(fitparams)), fill_value=np.inf)
+
     bounds = (
         [fitparams[0] * 0.5, np.min(xdata), fitparams[2] * 0.1, 0],
         [fitparams[0] * 1.5, np.max(xdata), fitparams[2] * 10, np.max(ydata)],
     )
-    for i, param in enumerate(fitparams):
-        if not (bounds[0][i] < param < bounds[1][i]):
-            fitparams[i] = np.mean((bounds[0][i], bounds[1][i]))
-            print(
-                f"Attempted to init fitparam {i} to {param}, which is out of bounds {bounds[0][i]} to {bounds[1][i]}. Instead init to {fitparams[i]}"
-            )
-    try:
-        pOpt, pCov = sp.optimize.curve_fit(
-            gaussian,
-            xdata,
-            ydata,
-            p0=np.array(fitparams, dtype="float64"),
-            bounds=bounds,
-        )
-        # return pOpt, pCov
-    except RuntimeError:
-        print("Warning: fit failed!")
-        # return 0, 0
-    return pOpt, pCov
+
+    return generic_fit(
+        gaussian,
+        xdata,
+        ydata,
+        fitparams,
+        bounds=bounds,
+        error_message="Warning: Fit Gaussian failed!",
+    )
 
 
 # ====================================================== #
@@ -1441,7 +1303,7 @@ def fit_doublegauss(xdata, ydata, fitparams):
             bounds=(lb, ub),
             maxfev=10000,  # Increase max iterations for convergence
         )
-    except Exception as e:
+    except Exception:
         # print(f"Fit failed: {e}")
         # If fit fails, return the initial guesses so the code doesn't crash
         pOpt = fitparams
@@ -2031,32 +1893,23 @@ def fit_probg_Xhalf(xdata, ydata, fitparams=None):
     if fitparams is None:
         fitparams = [None] * 2
     else:
-        fitparams = np.copy(fitparams)
+        fitparams = list(fitparams)
+
     if fitparams[0] is None:
         fitparams[0] = np.average(ydata)
     if fitparams[1] is None:
         fitparams[1] = 0.0
-    bounds = (
-        [min(ydata), -20.0],
-        [max(ydata), 20.0],
+
+    bounds = ([min(ydata), -20.0], [max(ydata), 20.0])
+
+    return generic_fit(
+        probg_Xhalf,
+        xdata,
+        ydata,
+        fitparams,
+        bounds=bounds,
+        error_message="Warning: Fit X/2 rotation error failed!",
     )
-    for i, param in enumerate(fitparams):
-        if not (bounds[0][i] < param < bounds[1][i]):
-            fitparams[i] = np.mean((bounds[0][i], bounds[1][i]))
-            print(
-                f"Attempted to init fitparam {i} to {param}, which is out of bounds {bounds[0][i]} to {bounds[1][i]}. Instead init to {fitparams[i]}"
-            )
-    pOpt = fitparams
-    pCov = np.full(shape=(len(fitparams), len(fitparams)), fill_value=np.inf)
-    try:
-        pOpt, pCov = sp.optimize.curve_fit(
-            probg_Xhalf, xdata, ydata, p0=fitparams, bounds=bounds
-        )
-        # return pOpt, pCov
-    except RuntimeError:
-        print("Warning: fit failed!")
-        # return 0, 0
-    return pOpt, pCov
 
 
 def fit_probg_X(xdata, ydata, fitparams=None):
@@ -2082,32 +1935,23 @@ def fit_probg_X(xdata, ydata, fitparams=None):
     if fitparams is None:
         fitparams = [None] * 2
     else:
-        fitparams = np.copy(fitparams)
+        fitparams = list(fitparams)
+
     if fitparams[0] is None:
         fitparams[0] = np.average(ydata)
     if fitparams[1] is None:
         fitparams[1] = 0.0
-    bounds = (
-        [min(ydata), -20.0],
-        [max(ydata), 20.0],
+
+    bounds = ([min(ydata), -20.0], [max(ydata), 20.0])
+
+    return generic_fit(
+        probg_X,
+        xdata,
+        ydata,
+        fitparams,
+        bounds=bounds,
+        error_message="Warning: Fit X rotation error failed!",
     )
-    for i, param in enumerate(fitparams):
-        if not (bounds[0][i] < param < bounds[1][i]):
-            fitparams[i] = np.mean((bounds[0][i], bounds[1][i]))
-            print(
-                f"Attempted to init fitparam {i} to {param}, which is out of bounds {bounds[0][i]} to {bounds[1][i]}. Instead init to {fitparams[i]}"
-            )
-    pOpt = fitparams
-    pCov = np.full(shape=(len(fitparams), len(fitparams)), fill_value=np.inf)
-    try:
-        pOpt, pCov = sp.optimize.curve_fit(
-            probg_X, xdata, ydata, p0=fitparams, bounds=bounds
-        )
-        # return pOpt, pCov
-    except RuntimeError:
-        print("Warning: fit failed!")
-        # return 0, 0
-    return pOpt, pCov
 
 
 def fit_probg_Xhalf_decay(xdata, ydata, fitparams=None):
@@ -2134,34 +1978,25 @@ def fit_probg_Xhalf_decay(xdata, ydata, fitparams=None):
     if fitparams is None:
         fitparams = [None] * 3
     else:
-        fitparams = np.copy(fitparams)
+        fitparams = list(fitparams)
+
     if fitparams[0] is None:
         fitparams[0] = np.average(ydata)
     if fitparams[1] is None:
         fitparams[1] = 0.0
     if fitparams[2] is None:
         fitparams[2] = 10
-    bounds = (
-        [min(ydata), -20.0, 1],
-        [max(ydata), 20.0, 100],
+
+    bounds = ([min(ydata), -20.0, 1], [max(ydata), 20.0, 100])
+
+    return generic_fit(
+        probg_Xhalf_decay,
+        xdata,
+        ydata,
+        fitparams,
+        bounds=bounds,
+        error_message="Warning: Fit decaying X/2 rotation error failed!",
     )
-    for i, param in enumerate(fitparams):
-        if not (bounds[0][i] < param < bounds[1][i]):
-            fitparams[i] = np.mean((bounds[0][i], bounds[1][i]))
-            print(
-                f"Attempted to init fitparam {i} to {param}, which is out of bounds {bounds[0][i]} to {bounds[1][i]}. Instead init to {fitparams[i]}"
-            )
-    pOpt = fitparams
-    pCov = np.full(shape=(len(fitparams), len(fitparams)), fill_value=np.inf)
-    try:
-        pOpt, pCov = sp.optimize.curve_fit(
-            probg_Xhalf_decay, xdata, ydata, p0=fitparams, bounds=bounds
-        )
-        # return pOpt, pCov
-    except RuntimeError:
-        print("Warning: fit failed!")
-        # return 0, 0
-    return pOpt, pCov
 
 
 # ====================================================== #
@@ -2208,27 +2043,18 @@ def fit_poisson(xdata, ydata, fitparams=None):
     if fitparams is None:
         fitparams = [None] * 1
     else:
-        fitparams = np.copy(fitparams)
+        fitparams = list(fitparams)
+
     if fitparams[0] is None:
         fitparams[0] = ydata[0]
-    bounds = (
-        [0],
-        [10],
+
+    bounds = ([0], [10])
+
+    return generic_fit(
+        poisson,
+        xdata,
+        ydata,
+        fitparams,
+        bounds=bounds,
+        error_message="Warning: Fit Poisson failed!",
     )
-    for i, param in enumerate(fitparams):
-        if not (bounds[0][i] < param < bounds[1][i]):
-            fitparams[i] = np.mean((bounds[0][i], bounds[1][i]))
-            print(
-                f"Attempted to init fitparam {i} to {param}, which is out of bounds {bounds[0][i]} to {bounds[1][i]}. Instead init to {fitparams[i]}"
-            )
-    pOpt = fitparams
-    pCov = np.full(shape=(len(fitparams), len(fitparams)), fill_value=np.inf)
-    try:
-        pOpt, pCov = sp.optimize.curve_fit(
-            poisson, xdata, ydata, p0=fitparams, bounds=bounds
-        )
-        # return pOpt, pCov
-    except RuntimeError:
-        print("Warning: fit failed!")
-        # return 0, 0
-    return pOpt, pCov
