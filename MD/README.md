@@ -73,5 +73,5 @@
 | 文件 | 說明 |
 | --- | --- |
 | [../Readme.md](../Readme.md) | `qick_workspace/` 程式撰寫規範（命名、型別、docstring） |
-| [../CLAUDE.md](../CLAUDE.md) | `reconstruct/` 套件架構說明（給 Claude Code 使用） |
-| [../reconstruct/CHECKPOINT.md](../reconstruct/CHECKPOINT.md) | `reconstruct` 套件建置進度（CP1–CP11，已完成） |
+| [../CLAUDE.md](../CLAUDE.md) | `QickworkspaceV2/` 套件架構說明（給 Claude Code 使用） |
+| [../QickworkspaceV2/CHECKPOINT.md](../QickworkspaceV2/CHECKPOINT.md) | `QickworkspaceV2` 套件建置進度（CP1–CP11，已完成） |

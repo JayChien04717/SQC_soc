@@ -1,16 +1,16 @@
-# CLAUDE.md
+﻿# CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What This Repo Is
 
-`reconstruct/` is a fully self-contained automated quantum calibration framework built on QICK (Quantum Instruction Control Kit). It replaces the original `qick_workspace` codebase. **No file inside `reconstruct/` may import from `qick_workspace`** — all shared code is maintained as standalone copies inside `reconstruct/tools/`, `reconstruct/plotter/`, and `reconstruct/instruments/`.
+`QickworkspaceV2/` is a fully self-contained automated quantum calibration framework built on QICK (Quantum Instruction Control Kit). It replaces the original `qick_workspace` codebase. **No file inside `QickworkspaceV2/` may import from `qick_workspace`** — all shared code is maintained as standalone copies inside `QickworkspaceV2/tools/`, `QickworkspaceV2/plotter/`, and `QickworkspaceV2/instruments/`.
 
 ## Verifying the Package
 
 ```bash
-python -c "import reconstruct; print(reconstruct.__version__)"
-python -c "from reconstruct import QICKBackend; b = QICKBackend.from_pyro4('IP', PORT)"
+python -c "import QickworkspaceV2; print(QickworkspaceV2.__version__)"
+python -c "from QickworkspaceV2 import QICKBackend; b = QICKBackend.from_pyro4('IP', PORT)"
 ```
 
 There are no automated test suites or lint scripts. Validation is notebook-driven + hardware-in-the-loop. Use `SimulatedBackend` for offline smoke testing.
@@ -80,27 +80,27 @@ Raw hardware data is always complex. `iq_process` controls what gets stored in `
 - `"abs"` (default) → `np.abs(iq)` — works without readout optimization
 - `"real"` → `np.real(iq)` — use after single-shot optimization rotates IQ to I-axis
 
-### Import Paths Inside `reconstruct/`
+### Import Paths Inside `QickworkspaceV2/`
 
 Depth-relative dot-count from package root:
 - `experiments/<family>/` → 3 levels deep → `from ...core.base_program import BaseProgram`
 - `analysis/` or `plotter/` → 2 levels → `from ..tools.fitting import fitlor`
 - `calibration/` → 2 levels → `from ..config.system_cfg import ExperimentConfig`
 
-Never use `from qick_workspace...` anywhere in `reconstruct/`. The fallback for `abcd_rf_fit` is `from ...tools.abcd_rf_fit.abcd_rf_fit import analyze`, not the qick_workspace path.
+Never use `from qick_workspace...` anywhere in `QickworkspaceV2/`. The fallback for `abcd_rf_fit` is `from ...tools.abcd_rf_fit.abcd_rf_fit import analyze`, not the qick_workspace path.
 
 ### Adding a New Experiment
 
-1. Create `reconstruct/experiments/<family>/<name>.py`
+1. Create `QickworkspaceV2/experiments/<family>/<name>.py`
 2. Define `class MyProgram(BaseProgram)` with `_initialize` + `_body`
 3. Define `class MyExperiment(BaseExperiment)` with the class attributes above
-4. Export from `reconstruct/experiments/<family>/__init__.py`
-5. Optionally add an `Analysis` subclass in `reconstruct/analysis/`
+4. Export from `QickworkspaceV2/experiments/<family>/__init__.py`
+5. Optionally add an `Analysis` subclass in `QickworkspaceV2/analysis/`
 
 ### REST Service
 
 ```bash
-uvicorn reconstruct.service.api:app --host 0.0.0.0 --port 8000
+uvicorn QickworkspaceV2.service.api:app --host 0.0.0.0 --port 8000
 ```
 
 Jobs run async in background threads. Key endpoints: `POST /experiments/run`, `GET /experiments/{id}/result`, `POST /calibrate/{qubit}/run`.

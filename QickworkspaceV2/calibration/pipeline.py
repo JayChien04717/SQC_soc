@@ -1,4 +1,4 @@
-"""
+﻿"""
 AutoCalibrate: Rebuilt ge calibration pipeline using the composite framework.
 
 Reproduces the full qick_workspace auto_calibrate.py logic with:
@@ -23,7 +23,7 @@ class AutoCalibrate:
     Parameters
     ----------
     config_all : ExperimentConfig
-        Live config store (``reconstruct.config.system_cfg.ExperimentConfig``).
+        Live config store (``QickworkspaceV2.config.system_cfg.ExperimentConfig``).
     qubit : str
         Qubit label, e.g. ``"Q1"``.
     cal_store : CalibrationStore or None

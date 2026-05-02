@@ -1,4 +1,4 @@
-"""
+﻿"""
 SimulatedBackend — software mock backend for offline development and testing.
 
 Generates realistic synthetic IQ data for all experiment types without
@@ -207,7 +207,7 @@ class SimulatedBackend(BaseBackend):
 
     def activate(self):
         """Set as global legacy session."""
-        from reconstruct.core.base_experiment import BaseExperiment
+        from QickworkspaceV2.core.base_experiment import BaseExperiment
 
         BaseExperiment.setup(self.soc, self.soccfg, "")
         print("[SimulatedBackend] Session activated (no hardware required)")

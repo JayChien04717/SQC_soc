@@ -1,4 +1,4 @@
-"""
+﻿"""
 Composite experiments — BatchExperiment and ParallelExperiment.
 
 Inspired by IBM Qiskit Experiments ``BatchExperiment`` / ``ParallelExperiment``.
@@ -7,7 +7,7 @@ Usage
 -----
 ::
 
-    from reconstruct.core.composite import BatchExperiment
+    from QickworkspaceV2.core.composite import BatchExperiment
 
     # Declarative calibration pipeline — each step runs sequentially,
     # passing updated config forward.

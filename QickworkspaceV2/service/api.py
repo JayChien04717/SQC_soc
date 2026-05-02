@@ -1,4 +1,4 @@
-"""
+﻿"""
 Service layer: FastAPI REST interface for remote experiment execution.
 
 Endpoints
@@ -13,11 +13,11 @@ POST  /calibrate/{qubit}/run        — trigger AutoCalibrate pipeline
 
 Usage
 -----
-    uvicorn reconstruct.service.api:app --host 0.0.0.0 --port 8000
+    uvicorn QickworkspaceV2.service.api:app --host 0.0.0.0 --port 8000
 
     # or from within Python:
     import uvicorn
-    from reconstruct.service.api import app
+    from QickworkspaceV2.service.api import app
     uvicorn.run(app, host="0.0.0.0", port=8000)
 """
 

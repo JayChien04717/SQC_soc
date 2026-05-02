@@ -1,20 +1,20 @@
-"""
-reconstruct — IBM/IQM-style automated quantum calibration framework.
+﻿"""
+QickworkspaceV2 — IBM/IQM-style automated quantum calibration framework.
 
 Quick start
 -----------
-    from reconstruct.core.base_experiment import BaseExperiment
-    from reconstruct.backend.qick_backend import QICKBackend
-    from reconstruct.config.system_cfg import ExperimentConfig
-    from reconstruct.calibration import CalibrationStore, AutoCalibrate
-    from reconstruct.experiments import ResonatorSpec, QubitSpec, T1
+    from .core.base_experiment import BaseExperiment
+    from .backend.qick_backend import QICKBackend
+    from .config.system_cfg import ExperimentConfig
+    from .calibration import CalibrationStore, AutoCalibrate
+    from .experiments import ResonatorSpec, QubitSpec, T1
 
     # --- Hardware setup ---
     backend = QICKBackend.from_pyro4("192.168.1.100", 8888)
     backend.activate()                     # sets BaseExperiment._soc/_soccfg
 
     # --- Config ---
-    from reconstruct.config.system_cfg import ExperimentConfig
+    from .config.system_cfg import ExperimentConfig
     cfg_all = ExperimentConfig()
 
     # --- Single experiment ---
@@ -29,9 +29,9 @@ Quick start
     auto.summary()
 
     # --- REST service ---
-    from reconstruct.service import create_app
+    from .service import create_app
     app = create_app(cal_store=store, config_all=cfg_all, backend=backend)
-    # uvicorn reconstruct.service.api:app --host 0.0.0.0 --port 8000
+    # uvicorn .service.api:app --host 0.0.0.0 --port 8000
 """
 
 from .core.experiment_data import ExperimentData, QualityFlag

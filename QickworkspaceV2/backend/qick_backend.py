@@ -1,4 +1,4 @@
-"""
+﻿"""
 QICKBackend — real hardware backend wrapping a live QICK connection.
 
 Usage
@@ -14,7 +14,7 @@ Usage
     result = expt.run(py_avg=50)
 
     # Or use legacy class-level setup (backward compat)
-    from reconstruct.core import BaseExperiment
+    from QickworkspaceV2.core import BaseExperiment
     BaseExperiment.setup(soc, soccfg, data_path)
 """
 
@@ -55,7 +55,7 @@ class QICKBackend(BaseBackend):
         Set this backend as the global session for legacy ``BaseExperiment``
         API.  Equivalent to ``BaseExperiment.setup(soc, soccfg, data_path)``.
         """
-        from reconstruct.core.base_experiment import BaseExperiment
+        from QickworkspaceV2.core.base_experiment import BaseExperiment
 
         BaseExperiment.setup(self.soc, self.soccfg, self.data_path)
         print(

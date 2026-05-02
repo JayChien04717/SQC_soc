@@ -1,16 +1,16 @@
-"""
+﻿"""
 system_cfg — experiment configuration and hardware channel map.
 
 This module is the single place to edit:
   * DATA_PATH   — where HDF5 files are saved
   * config_list — hardware config dicts, one per qubit (nested structure)
-  * ExperimentConfig — re-exported from reconstruct.tools.system_tool
+  * ExperimentConfig — re-exported from QickworkspaceV2.tools.system_tool
                        (the full-featured version with dot-notation, auto-search,
                         addict.Dict returns, and muxconfig)
 
 Usage (matches original qick_workspace pattern exactly):
-    from reconstruct.tools.system_tool import ExperimentConfig
-    from reconstruct.config.system_cfg import config_list, DATA_PATH
+    from QickworkspaceV2.tools.system_tool import ExperimentConfig
+    from QickworkspaceV2.config.system_cfg import config_list, DATA_PATH
 
     qubit = "Q1"
     config_all = ExperimentConfig(config_list)
