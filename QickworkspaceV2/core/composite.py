@@ -49,10 +49,17 @@ class BatchExperiment:
 
     def __init__(
         self,
-        experiments: List[BaseExperiment],
+        experiments: List,
         stop_on_bad: bool = False,
     ):
-        self.experiments = experiments
+        # Accept both bare experiments and (name, expt) tuples
+        self._named: List = []
+        for item in experiments:
+            if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str):
+                self._named.append(item)
+            else:
+                self._named.append((None, item))
+        self.experiments = [expt for _, expt in self._named]
         self.stop_on_bad = stop_on_bad
         self.results: Dict[str, ExperimentData] = {}
         self._parent_id: Optional[str] = None
@@ -78,8 +85,8 @@ class BatchExperiment:
         batch_id = str(uuid.uuid4())[:8]
         self.results = {}
 
-        for i, expt in enumerate(self.experiments):
-            expt_name = expt.EXPT_NAME or expt.__class__.__name__
+        for i, (label, expt) in enumerate(self._named):
+            expt_name = label or expt.EXPT_NAME or expt.__class__.__name__
             print(f"\n{'='*60}")
             print(f"  BatchExperiment [{i+1}/{len(self.experiments)}] — {expt_name}")
             print(f"{'='*60}")
@@ -126,11 +133,18 @@ class ParallelExperiment:
 
     def __init__(
         self,
-        experiments: List[BaseExperiment],
+        experiments: List,
         max_workers: Optional[int] = None,
     ):
-        self.experiments = experiments
-        self.max_workers = max_workers or len(experiments)
+        # Accept both bare experiments and (name, expt) tuples
+        self._named: List = []
+        for item in experiments:
+            if isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str):
+                self._named.append(item)
+            else:
+                self._named.append((None, item))
+        self.experiments = [expt for _, expt in self._named]
+        self.max_workers = max_workers or len(self.experiments)
         self.results: Dict[str, ExperimentData] = {}
 
     def run(self, py_avg: int, **kwargs) -> Dict[str, ExperimentData]:
@@ -139,8 +153,8 @@ class ParallelExperiment:
 
         futures = {}
         with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
-            for expt in self.experiments:
-                name = expt.EXPT_NAME or expt.__class__.__name__
+            for label, expt in self._named:
+                name = label or expt.EXPT_NAME or expt.__class__.__name__
                 future = pool.submit(expt.run, py_avg, **kwargs)
                 futures[future] = name
 
