@@ -6,9 +6,8 @@ from __future__ import annotations
 
 from ...core.base_program import BaseProgram
 from ...core.base_experiment import BaseExperiment
-from ...analysis.qubit import (
-    LorentzianAnalysis, PowerRabiAnalysis, QubitTempAnalysis,
-)
+from ...analysis.qubit import PowerRabiAnalysis, QubitTempAnalysis
+from ...analysis.resonator import LorentzianAnalysis
 
 
 # ── s010 — Qubit Spec EF ──────────────────────────────────────────────────────
