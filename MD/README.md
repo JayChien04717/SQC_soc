@@ -36,9 +36,7 @@
 
 | 文件 | 說明 |
 | --- | --- |
-| [TWPA_tuning_guide.md](TWPA_tuning_guide.md) | AI-TWPA-C 完整校正操作步驟（對應官方 Fig. 1.1 流程圖） |
-| [TWPA_gain_analyze_explained.md](TWPA_gain_analyze_explained.md) | `TWPAGain.analyze()` 計算流程逐行說明 |
-| [TWPA_official_notebook_flow.md](TWPA_official_notebook_flow.md) | 官方 AI-TWPA-C scoring notebook 流程說明（xr.Dataset 格式） |
+| [TWPA.md](TWPA.md) | AI-TWPA-C 完整參考手冊：校正流程、`TWPAGain.analyze()` 計算說明、官方 Scoring Notebook 格式對照 |
 
 ---
 
