@@ -160,6 +160,10 @@ class ExperimentConfig:
         names = [cfg.get("name", f"idx{i}") for i, cfg in enumerate(self._raw_list)]
         return f"ExperimentConfig(qubits={names})"
 
+    def qubit_names(self) -> list:
+        """Return the list of qubit names in config order."""
+        return [cfg.get("name", f"idx{i}") for i, cfg in enumerate(self._raw_list)]
+
     def get_qubit(self, q_id: Union[int, str]) -> AddictDict:
         """Return a flat configuration dict for a single qubit."""
         indices = self._resolve_indices(q_id)
