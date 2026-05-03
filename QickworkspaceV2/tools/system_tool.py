@@ -255,8 +255,15 @@ class ExperimentConfig:
         self.update(param, value, q_index)
 
     def update(self, param, value=None, q_index=None) -> None:
-        """Unified update: dict merge, auto-search, or dot-path."""
+        """Unified update: dict merge, list-of-tuples, auto-search, or dot-path."""
         target_indices = self._resolve_indices(q_index)
+
+        if isinstance(param, (list, tuple)) and all(
+            isinstance(item, (list, tuple)) and len(item) == 2 for item in param
+        ):
+            for k, v in param:
+                self.update(k, v, q_index=q_index)
+            return
 
         if isinstance(param, dict):
             updated_count = 0
