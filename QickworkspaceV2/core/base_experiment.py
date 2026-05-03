@@ -166,7 +166,11 @@ class BaseExperiment:
             self.IQ_PROCESS = iq_process
 
         self._yoko_mode = kwargs.get("yoko_mode", None)
-        prog = self._create_program()
+        if getattr(self.soc, "is_simulated", False):
+            from ..backend.simulated_backend import _MockProgram
+            prog = _MockProgram(self.cfg, self.EXPT_NAME)
+        else:
+            prog = self._create_program()
         self._sweep_vals_x = self._extract_sweep_axis(prog)
         self._sweep_vals_y = self._extract_sweep_axis_y(prog)
 

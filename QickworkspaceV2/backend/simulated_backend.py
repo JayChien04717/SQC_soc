@@ -52,6 +52,8 @@ class _MockSoCCfg:
 class _MockSoC:
     """Minimal mock of QickSoc — provides acquire() interface."""
 
+    is_simulated = True  # sentinel checked by BaseExperiment to skip real program creation
+
     def __init__(self, noise_level: float = 0.02):
         self.noise_level = noise_level
         self._cfg = _MockSoCCfg()
