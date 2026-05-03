@@ -7,8 +7,6 @@ from __future__ import annotations
 from ...core.base_program import BaseProgram
 from ...core.base_experiment import BaseExperiment
 from ...analysis.qubit import PowerRabiAnalysis, TimeRabiAnalysis
-from ...tools.fitting import decaysin, fitdecaysin, fix_phase
-from ...plotter.plot_utils import plot_final
 
 
 # ── s004 — Time Rabi ──────────────────────────────────────────────────────────
@@ -55,17 +53,6 @@ class TimeRabi(BaseExperiment):
     def _extract_sweep_axis(self, prog):
         return prog.get_pulse_param("qb_pulse", "length", as_array=True)
 
-    def _post_fit(self, x_vals):
-        self.fit_params, error, fig, ax = plot_final(
-            x_vals, self.iqdata, "Pulse Length (us)", fitdecaysin, decaysin, return_ax=True,
-        )
-        self.fit_errors = error
-        pi_len, pi2_len = fix_phase(self.fit_params)
-        ax.axvline(pi_len, color="red", linestyle="--", label=r"$\pi$ Length")
-        ax.axvline(pi2_len, color="red", linestyle="--", label=r"$\pi/2$ Length")
-        fig.suptitle(f"Time Rabi ge, Rabi freq = {self.fit_params[1]:.2f} MHz")
-        fig.tight_layout()
-        return pi_len, pi2_len
 
 
 # ── s005 — Power Rabi ─────────────────────────────────────────────────────────
@@ -112,17 +99,6 @@ class PowerRabi(BaseExperiment):
     def _extract_sweep_axis(self, prog):
         return prog.get_pulse_param("qb_pulse", "gain", as_array=True)
 
-    def _post_fit(self, x_vals):
-        self.fit_params, error, fig, ax = plot_final(
-            x_vals, self.iqdata, "Dac Gain(a.u)", fitdecaysin, decaysin, return_ax=True,
-        )
-        self.fit_errors = error
-        fig.suptitle("Power Rabi ge")
-        fig.tight_layout()
-        pi_gain, pi2_gain = fix_phase(self.fit_params)
-        ax.axvline(pi_gain, color="red", linestyle="--", label=r"$\pi$ Gain")
-        ax.axvline(pi2_gain, color="red", linestyle="--", label=r"$\pi/2$ Gain")
-        return round(pi_gain, 6), round(pi2_gain, 6)
 
 
 # ── s005b — Power Rabi with Reset ────────────────────────────────────────────

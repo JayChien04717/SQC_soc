@@ -259,21 +259,6 @@ class BaseExperiment:
     # Save
     # ══════════════════════════════════════════════════════════════════════════
 
-    def save(self, qb_idx, yoko_value=None, config_all=None, title=None) -> str:
-        """Save to HDF5 using the new ExperimentData format."""
-        if self.result is None:
-            raise RuntimeError("Run the experiment before saving.")
-
-        from ..tools.system_tool import get_next_filename_labber
-
-        data_path = BaseExperiment._data_path or ""
-        suffix = f"_{title}" if title else ""
-        expt_name = f"{self.EXPT_NAME}_{qb_idx}{suffix}"
-        base = get_next_filename_labber(data_path, expt_name, yoko_value)
-        filepath = base + ".h5"
-
-        return self.result.save(filepath)
-
     def saveLabber(self, qb_idx, yoko_value=None, config_all=None, title=None):
         """Legacy Labber-format HDF5 save (unchanged from original)."""
         from ..tools.system_tool import (

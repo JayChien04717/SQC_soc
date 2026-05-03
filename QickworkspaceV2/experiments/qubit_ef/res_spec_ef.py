@@ -57,26 +57,12 @@ class ResonatorSpec_ef(BaseExperiment):
         return prog.get_pulse_param("res_pulse", "freq", as_array=True)
 
     def run(self, py_avg, solve_type="hm", **kwargs):
-        self._solve_type = solve_type
+        self.cfg["_solve_type"] = solve_type
         return super().run(py_avg, **kwargs)
 
-    def _post_fit(self, x_vals):
-        try:
-            try:
-                from abcd_rf_fit import analyze
-            except ImportError:
-                from ...tools.abcd_rf_fit.abcd_rf_fit import analyze
-
-            solve_type = getattr(self, "_solve_type", "hm")
-            fit = analyze(x_vals * 1e6, self.iqdata, solve_type, fit_edelay=True)
-            p = fit.tolist()
-            self.param = {"f0_Hz": p[0], "kappa_Hz": p[1], "kappa_c_Hz": p[2]}
-        except Exception as e:
-            self.param = None
-            print(f"Resonator fit failed: {e}")
-        return self.param
-
     def _save_comment(self, dict_val):
-        if self.param is not None and hasattr(self.param, '__len__'):
-            return f"f_res = {self.param[0] / 1e6:.4f} MHz, \n{dict_val}"
+        if self.result is not None:
+            f0 = self.result.fit_result.get("f0_GHz", (None,))[0]
+            if f0 is not None:
+                return f"f_res = {f0 * 1000:.4f} MHz, \n{dict_val}"
         return str(dict_val)

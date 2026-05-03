@@ -9,8 +9,6 @@ import numpy as np
 from ...core.base_program import BaseProgram
 from ...core.base_experiment import BaseExperiment
 from ...analysis.resonator import LorentzianAnalysis
-from ...tools.fitting import fitlor, lorfunc
-from ...plotter.plot_utils import plot_final
 
 
 class QubitSpecProgram(BaseProgram):
@@ -60,19 +58,11 @@ class QubitSpec(BaseExperiment):
     def _extract_sweep_axis(self, prog):
         return prog.get_pulse_param("qb_pulse", "freq", as_array=True)
 
-    def _post_fit(self, x_vals):
-        fit_params, error, fig = plot_final(
-            x_vals, self.iqdata, "Frequency(MHz)", fitlor, lorfunc
-        )
-        fig.suptitle(f"Qubit ge Spectrum, Qubit freq = {fit_params[2]:.6f} MHz")
-        fig.tight_layout()
-        self.fit_params = fit_params
-        self.fit_errors = error
-        return round(fit_params[2], 6)
-
     def _save_comment(self, dict_val):
-        if self.fit_params is not None:
-            return f"f_q_ge = {self.fit_params[2]:.4f} MHz, \n{dict_val}"
+        if self.result is not None:
+            f0 = self.result.fit_result.get("f0_MHz", (None,))[0]
+            if f0 is not None:
+                return f"f_q_ge = {f0:.4f} MHz, \n{dict_val}"
         return str(dict_val)
 
 

@@ -44,6 +44,14 @@ from .backend.simulated_backend import SimulatedBackend
 from .calibration import CalibrationStore, CalibrationGraph, CalibrationNode, CalibrationMonitor, AutoCalibrate
 from .config.system_cfg import ExperimentConfig
 
+# experiments
+from .experiments.setup import SingleShot_gef, SingleShot_ge_opt, hist, TOF
+from .experiments.resonator import ResonatorSpec, Punchout, ResonatorSpecFlux
+from .experiments.qubit_ge import QubitSpec, QubitSpecFlux, TimeRabi, PowerRabi, PowerRabiReset
+from .experiments.coherence import Ramsey, ACStark, SpinEcho, T1, RamseyEf, T1Ef
+from .experiments.qubit_ef import ResonatorSpec_ef, QubitSpecEf, PowerRabiEf, QubitTemp
+from .experiments.characterization import AllXY, RandomizedBenchmarking, AutoRB, Tomography
+
 __version__ = "1.0.0"
 
 __all__ = [
@@ -58,4 +66,16 @@ __all__ = [
     "CalibrationMonitor", "AutoCalibrate",
     # config
     "ExperimentConfig",
+    # experiments — setup
+    "SingleShot_gef", "SingleShot_ge_opt", "hist", "TOF",
+    # experiments — resonator
+    "ResonatorSpec", "Punchout", "ResonatorSpecFlux",
+    # experiments — qubit ge
+    "QubitSpec", "QubitSpecFlux", "TimeRabi", "PowerRabi", "PowerRabiReset",
+    # experiments — coherence
+    "Ramsey", "ACStark", "SpinEcho", "T1", "RamseyEf", "T1Ef",
+    # experiments — qubit ef
+    "ResonatorSpec_ef", "QubitSpecEf", "PowerRabiEf", "QubitTemp",
+    # experiments — characterization
+    "AllXY", "RandomizedBenchmarking", "AutoRB", "Tomography",
 ]

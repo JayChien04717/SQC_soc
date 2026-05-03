@@ -56,39 +56,12 @@ class ResonatorSpec(BaseExperiment):
 
     def run(self, py_avg, solve_type="hm", **kwargs):
         """Run resonator spectroscopy.  ``solve_type`` passed to circle fit."""
-        self._solve_type = solve_type
+        self.cfg["_solve_type"] = solve_type
         return super().run(py_avg, **kwargs)
 
-    def _post_fit(self, x_vals):
-        result_dict = None
-        try:
-            try:
-                from abcd_rf_fit import analyze
-            except ImportError:
-                from ...tools.abcd_rf_fit.abcd_rf_fit import analyze
-
-            solve_type = getattr(self, "_solve_type", "hm")
-            fit = analyze(x_vals * 1e6, self.iqdata, solve_type, fit_edelay=True)
-            fit.plot()
-            p = fit.tolist()
-            f0, kappa, kappa_c = p[0], p[1], p[2]
-            result_dict = {
-                "Fres(GHz)": round(f0 / 1e9, 4),
-                "Qi": round(f0 / (kappa - kappa_c)) if kappa > kappa_c else 0,
-                "absQc": round(f0 / kappa_c) if kappa_c > 0 else 0,
-                "Ql": round(f0 / kappa) if kappa > 0 else 0,
-                "κ(MHz)": round(kappa * 1e-6, 2),
-            }
-            print(f"abcd_rf_fit result:\n {result_dict}")
-            self.param = result_dict
-        except Exception as e:
-            print(f"Circle fit failed ({e}). No fit_params set.")
-            self.param = None
-
-        return self.param
-
     def _save_comment(self, dict_val):
-        if isinstance(self.param, dict):
-            f_res_mhz = self.param.get("Fres(GHz)", 0) * 1000
-            return f"f_res = {f_res_mhz:.4f} MHz, \n{dict_val}"
-        return f"{dict_val}"
+        if self.result is not None:
+            f0 = self.result.fit_result.get("f0_GHz", (None,))[0]
+            if f0 is not None:
+                return f"f_res = {f0 * 1000:.4f} MHz, \n{dict_val}"
+        return str(dict_val)

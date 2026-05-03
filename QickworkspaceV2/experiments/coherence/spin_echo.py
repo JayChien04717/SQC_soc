@@ -7,8 +7,6 @@ from __future__ import annotations
 from ...core.base_program import BaseProgram
 from ...core.base_experiment import BaseExperiment
 from ...analysis.qubit import SpinEchoAnalysis
-from ...tools.fitting import decaysin, fitdecaysin, expfunc, fitexp
-from ...plotter.plot_utils import plot_final
 
 
 class SpinEchoProgram(BaseProgram):
@@ -64,29 +62,9 @@ class SpinEcho(BaseExperiment):
         )
         return self.delay_times
 
-    def _post_fit(self, x_vals):
-        if self.cfg["ramsey_freq"] != 0:
-            self.fit_params, error, fig = plot_final(
-                x_vals, self.iqdata, "Times (us)", fitdecaysin, decaysin
-            )
-            fig.suptitle(
-                f"T2 Echo = {self.fit_params[3]:.2f} us, "
-                f"detune = {self.fit_params[1]:.5f}MHz "
-                f"± {error[1] * 1e3:.3f}kHz",
-                fontsize=15,
-            )
-        else:
-            self.fit_params, error, fig = plot_final(
-                x_vals, self.iqdata, "Times (us)", fitexp, expfunc
-            )
-            fig.suptitle(f"T2 Echo = {self.fit_params[2]:.2f} us", fontsize=15)
-        self.fit_errors = error
-        fig.tight_layout()
-        return self.fit_params, error
-
     def _save_comment(self, dict_val):
-        if self.fit_params is not None:
-            if self.cfg["ramsey_freq"] != 0:
-                return f"T2 Spin Echo = {self.fit_params[3]:.2f} us\n{dict_val}"
-            return f"T2 Spin Echo = {self.fit_params[2]:.2f} us\n{dict_val}"
+        if self.result is not None:
+            T2 = self.result.fit_result.get("T2e_us", (None,))[0]
+            if T2 is not None:
+                return f"T2 Spin Echo = {T2:.2f} us\n{dict_val}"
         return str(dict_val)

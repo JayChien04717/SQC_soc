@@ -1,8 +1,8 @@
 from .setup import SingleShot_gef, SingleShot_ge_opt, hist, TOF
 from .resonator import ResonatorSpec, Punchout, ResonatorSpecFlux
 from .qubit_ge import QubitSpec, QubitSpecFlux, TimeRabi, PowerRabi, PowerRabiReset
-from .coherence import Ramsey, ACStark, SpinEcho, T1
-from .qubit_ef import ResonatorSpec_ef, QubitSpecEf, PowerRabiEf, RamseyEf, T1Ef, QubitTemp
+from .coherence import Ramsey, ACStark, SpinEcho, T1, RamseyEf, T1Ef
+from .qubit_ef import ResonatorSpec_ef, QubitSpecEf, PowerRabiEf, QubitTemp
 from .characterization import AllXY, RandomizedBenchmarking, AutoRB, Tomography
 
 __all__ = [

@@ -7,8 +7,6 @@ from __future__ import annotations
 from ...core.base_program import BaseProgram
 from ...core.base_experiment import BaseExperiment
 from ...analysis.qubit import RamseyAnalysis
-from ...tools.fitting import decaysin, fitdecaysin, expfunc, fitexp
-from ...plotter.plot_utils import plot_final
 
 
 class RamseyProgram(BaseProgram):
@@ -65,45 +63,29 @@ class Ramsey(BaseExperiment):
         self.delay_times = prog.get_time_param("wait", "t", as_array=True)
         return self.delay_times
 
-    def _post_fit(self, x_vals):
-        if self.cfg["ramsey_freq"] != 0:
-            self.fit_params, error, fig = plot_final(
-                x_vals, self.iqdata, "Ramsey Times", fitdecaysin, decaysin
-            )
-            fig.suptitle(
-                f"T2 Ramsey = {self.fit_params[3]:.2f} us, "
-                f"detune = {self.fit_params[1]:.5f}MHz "
-                f"± {error[1] * 1e3:.3f}kHz",
-                fontsize=15,
-            )
-        else:
-            self.fit_params, error, fig = plot_final(
-                x_vals, self.iqdata, "Ramsey Times", fitexp, expfunc
-            )
-            fig.suptitle(f"T2 Ramsey = {self.fit_params[2]:.2f} us", fontsize=15)
-        self.fit_errors = error
-        fig.tight_layout()
-        return self.fit_params, error
-
     def correct_detune(self):
         """Correct qubit ge frequency based on fitted detuning."""
-        if abs(self.fit_params[1] - self.cfg["ramsey_freq"]) > 0.005:
+        if self.result is None:
+            raise RuntimeError("Run the experiment first.")
+        detune = self.result.fit_result.get("detune_MHz", (None,))[0]
+        if detune is None:
+            print("Detune not available (ramsey_freq=0 or fit failed).")
+            return self.cfg["qb_freq_ge"]
+        if abs(detune - self.cfg["ramsey_freq"]) > 0.005:
             self.cfg["qb_freq_ge"] = self.cfg["qb_freq_ge"] - round(
-                (self.fit_params[1] - self.cfg["ramsey_freq"]), 2
+                (detune - self.cfg["ramsey_freq"]), 2
             )
-            print(
-                f"over detune {round((self.fit_params[1] - self.cfg['ramsey_freq']), 5)}MHz"
-            )
+            print(f"over detune {round((detune - self.cfg['ramsey_freq']), 5)}MHz")
             return round(self.cfg["qb_freq_ge"], 5)
         else:
             print("Detune < 5kHz")
             return self.cfg["qb_freq_ge"]
 
     def _save_comment(self, dict_val):
-        if self.fit_params is not None:
-            if self.cfg["ramsey_freq"] != 0:
-                return f"T2 Ramsey = {self.fit_params[3]:.2f} us\n{dict_val}"
-            return f"T2 Ramsey = {self.fit_params[2]:.2f} us\n{dict_val}"
+        if self.result is not None:
+            T2 = self.result.fit_result.get("T2r_us", (None,))[0]
+            if T2 is not None:
+                return f"T2 Ramsey = {T2:.2f} us\n{dict_val}"
         return str(dict_val)
 
 

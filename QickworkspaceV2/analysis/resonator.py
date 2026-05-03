@@ -35,7 +35,8 @@ class ResonatorSpecAnalysis(BaseAnalysis):
             except ImportError:
                 from ..tools.abcd_rf_fit.abcd_rf_fit import analyze
 
-            fit = analyze(freqs * 1e6, iq, "hm", fit_edelay=True)
+            solve_type = data.config.get("_solve_type", "hm")
+            fit = analyze(freqs * 1e6, iq, solve_type, fit_edelay=True)
             p = fit.tolist()
             f0, kappa, kappa_c = p[0], p[1], p[2]
 
