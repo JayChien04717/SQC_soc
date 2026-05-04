@@ -70,37 +70,28 @@ class BaseAnalysis(ABC):
     def _show_fit(
         self,
         data: "ExperimentData",
-        fit_y,
+        simfunc,
+        fit_params,
         *,
         xlabel: str = "x",
-        ylabel: str = "ADC (Abs)",
         title: str = "",
-        fit_label: str = "fit",
+        result_text: str = "",
         extra_lines=None,
     ) -> None:
-        """Plot raw data + fit curve in a single figure."""
-        import numpy as np
-        import matplotlib.pyplot as plt
+        """Render the professional 2×3 fit-result figure via plot_utils."""
+        from ..plotter.plot_utils import plot_fit_result
 
         if data.x_axis is None or data.raw_iq is None:
             return
-        x = data.x_axis
-        y = np.abs(data.raw_iq)
-
-        fig, ax = plt.subplots(figsize=(7, 3))
-        ax.plot(x, y, "o", ms=4, alpha=0.7, label="data")
-        if fit_y is not None:
-            ax.plot(x if len(fit_y) == len(x) else np.linspace(x[0], x[-1], len(fit_y)),
-                    fit_y, "r-", lw=1.5, label=fit_label)
-        if extra_lines:
-            for kw in extra_lines:
-                ax.axvline(**kw)
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.legend(fontsize=9)
-        plt.tight_layout()
-        plt.show()
+        quality = data.quality.value if data.quality is not None else "no_information"
+        plot_fit_result(
+            data.x_axis, data.raw_iq, simfunc, fit_params,
+            x_label=xlabel,
+            title=title,
+            result_text=result_text,
+            quality=quality,
+            extra_lines=extra_lines,
+        )
 
     @abstractmethod
     def _run(self, data: "ExperimentData") -> None:

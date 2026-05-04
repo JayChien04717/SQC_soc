@@ -47,13 +47,18 @@ class T1Analysis(BaseAnalysis):
         if data.fit_params is None:
             return
         from ..tools.fitting import expfunc
-        x_fit = np.linspace(data.x_axis[0], data.x_axis[-1], 400)
-        T1 = data.fit_result.get("T1_us", (None,))[0]
+        T1  = data.fit_result.get("T1_us",    (None,))[0]
+        A   = data.fit_result.get("amplitude", (None,))[0]
+        off = data.fit_result.get("offset",    (None,))[0]
+        lines = []
+        if T1  is not None: lines.append(f"T1     = {T1:.2f} µs")
+        if A   is not None: lines.append(f"A      = {A:.3f}")
+        if off is not None: lines.append(f"offset = {off:.3f}")
         self._show_fit(
-            data, expfunc(x_fit, *data.fit_params),
-            xlabel="Wait time (µs)", ylabel="ADC (Abs)",
+            data, expfunc, data.fit_params,
+            xlabel="Wait time (µs)",
             title=f"T1 Relaxation  |  T1 = {T1:.2f} µs" if T1 else "T1 Relaxation",
-            fit_label=f"T1 = {T1:.2f} µs" if T1 else "fit",
+            result_text="\n".join(lines),
         )
 
 
@@ -127,26 +132,26 @@ class RamseyAnalysis(BaseAnalysis):
     def plot(self, data: ExperimentData) -> None:
         if data.fit_params is None:
             return
-        x_fit = np.linspace(data.x_axis[0], data.x_axis[-1], 400)
-        T2r = data.fit_result.get("T2r_us", (None,))[0]
-        detune = data.fit_result.get("detune_MHz", (None,))[0]
-        title = "Ramsey"
-        if T2r:
-            title += f"  |  T2* = {T2r:.2f} µs"
-        if detune:
-            title += f",  detune = {detune:.3f} MHz"
         ramsey_freq = data.config.get("ramsey_freq", 0.0)
         if ramsey_freq != 0:
-            from ..tools.fitting import decaysin
-            fit_y = decaysin(x_fit, *data.fit_params)
+            from ..tools.fitting import decaysin as simfunc
         else:
-            from ..tools.fitting import expfunc
-            fit_y = expfunc(x_fit, *data.fit_params)
+            from ..tools.fitting import expfunc as simfunc
+        T2r    = data.fit_result.get("T2r_us",           (None,))[0]
+        detune = data.fit_result.get("detune_MHz",        (None,))[0]
+        corr   = data.fit_result.get("corrected_freq_MHz",(None,))[0]
+        title  = "Ramsey"
+        if T2r:    title += f"  |  T2* = {T2r:.2f} µs"
+        if detune: title += f",  Δf = {detune:.3f} MHz"
+        lines = []
+        if T2r:    lines.append(f"T2*    = {T2r:.2f} µs")
+        if detune: lines.append(f"detune = {detune:.3f} MHz")
+        if corr:   lines.append(f"f_corr = {corr:.3f} MHz")
         self._show_fit(
-            data, fit_y,
-            xlabel="Free evolution time (µs)", ylabel="ADC (Abs)",
+            data, simfunc, data.fit_params,
+            xlabel="Free evolution time (µs)",
             title=title,
-            fit_label=f"T2* = {T2r:.2f} µs" if T2r else "fit",
+            result_text="\n".join(lines),
         )
 
 
@@ -194,20 +199,17 @@ class SpinEchoAnalysis(BaseAnalysis):
     def plot(self, data: ExperimentData) -> None:
         if data.fit_params is None:
             return
-        x_fit = np.linspace(data.x_axis[0], data.x_axis[-1], 400)
-        T2e = data.fit_result.get("T2e_us", (None,))[0]
         ramsey_freq = data.config.get("ramsey_freq", 0.0)
         if ramsey_freq != 0:
-            from ..tools.fitting import decaysin
-            fit_y = decaysin(x_fit, *data.fit_params)
+            from ..tools.fitting import decaysin as simfunc
         else:
-            from ..tools.fitting import expfunc
-            fit_y = expfunc(x_fit, *data.fit_params)
+            from ..tools.fitting import expfunc as simfunc
+        T2e = data.fit_result.get("T2e_us", (None,))[0]
         self._show_fit(
-            data, fit_y,
-            xlabel="Echo time (µs)", ylabel="ADC (Abs)",
+            data, simfunc, data.fit_params,
+            xlabel="Echo time (µs)",
             title=f"Spin Echo  |  T2E = {T2e:.2f} µs" if T2e else "Spin Echo",
-            fit_label=f"T2E = {T2e:.2f} µs" if T2e else "fit",
+            result_text=f"T2E = {T2e:.2f} µs" if T2e else "",
         )
 
 
@@ -247,19 +249,22 @@ class PowerRabiAnalysis(BaseAnalysis):
         if data.fit_params is None:
             return
         from ..tools.fitting import decaysin
-        x_fit = np.linspace(data.x_axis[0], data.x_axis[-1], 400)
-        pi_gain = data.fit_result.get("pi_gain", (None,))[0]
+        pi_gain  = data.fit_result.get("pi_gain",  (None,))[0]
         pi2_gain = data.fit_result.get("pi2_gain", (None,))[0]
         extra = []
         if pi_gain:
-            extra.append({"x": pi_gain, "color": "r", "ls": "--", "lw": 1, "label": f"π={pi_gain:.4f}"})
+            extra.append({"x": pi_gain,  "color": "#d62728", "ls": "--", "lw": 1.2, "label": f"π = {pi_gain:.4f}"})
         if pi2_gain:
-            extra.append({"x": pi2_gain, "color": "g", "ls": "--", "lw": 1, "label": f"π/2={pi2_gain:.4f}"})
+            extra.append({"x": pi2_gain, "color": "#2ca02c", "ls": "--", "lw": 1.2, "label": f"π/2 = {pi2_gain:.4f}"})
+        lines = []
+        if pi_gain:  lines.append(f"π     = {pi_gain:.4f}")
+        if pi2_gain: lines.append(f"π/2   = {pi2_gain:.4f}")
         self._show_fit(
-            data, decaysin(x_fit, *data.fit_params),
-            xlabel="Gain (a.u.)", ylabel="ADC (Abs)",
+            data, decaysin, data.fit_params,
+            xlabel="Gain (a.u.)",
             title=f"Power Rabi  |  π gain = {pi_gain:.4f}" if pi_gain else "Power Rabi",
-            fit_label="fit", extra_lines=extra,
+            result_text="\n".join(lines),
+            extra_lines=extra,
         )
 
 
@@ -295,13 +300,12 @@ class TimeRabiAnalysis(BaseAnalysis):
         if data.fit_params is None:
             return
         from ..tools.fitting import decaysin
-        x_fit = np.linspace(data.x_axis[0], data.x_axis[-1], 400)
         pi_len = data.fit_result.get("pi_length_us", (None,))[0]
         self._show_fit(
-            data, decaysin(x_fit, *data.fit_params),
-            xlabel="Pulse length (µs)", ylabel="ADC (Abs)",
+            data, decaysin, data.fit_params,
+            xlabel="Pulse length (µs)",
             title=f"Time Rabi  |  π time = {pi_len:.3f} µs" if pi_len else "Time Rabi",
-            fit_label=f"π = {pi_len:.3f} µs" if pi_len else "fit",
+            result_text=f"π length = {pi_len:.3f} µs" if pi_len else "",
         )
 
 

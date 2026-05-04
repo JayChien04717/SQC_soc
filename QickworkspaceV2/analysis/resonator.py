@@ -60,32 +60,39 @@ class ResonatorSpecAnalysis(BaseAnalysis):
     def plot(self, data: ExperimentData) -> None:
         if data.x_axis is None or data.raw_iq is None:
             return
-        # Build a Lorentzian overlay from fit_result
-        f0 = (data.fit_result.get("f_res[MHz]") or data.fit_result.get("f0_MHz") or (None,))[0]
+        from ..tools.fitting import lorfunc
+        f0    = (data.fit_result.get("f_res[MHz]") or data.fit_result.get("f0_MHz") or (None,))[0]
         kappa = data.fit_result.get("kappa_MHz", (None,))[0]
+        Qi    = data.fit_result.get("Qi",  (None,))[0]
+        Qc    = data.fit_result.get("Qc",  (None,))[0]
+        Ql    = data.fit_result.get("Ql",  (None,))[0]
+
+        # Build fit_params for lorfunc if ABCD succeeded (no fit_params stored)
         if data.fit_params is not None:
-            from ..tools.fitting import lorfunc
-            x_fit = np.linspace(data.x_axis[0], data.x_axis[-1], 400)
-            fit_y = lorfunc(x_fit, *data.fit_params)
+            fit_params = data.fit_params
         elif f0 is not None and kappa is not None:
-            # Reconstruct approximate Lorentzian from ABCD result
-            x = data.x_axis
-            amp = np.max(np.abs(data.raw_iq)) - np.min(np.abs(data.raw_iq))
+            amp    = np.max(np.abs(data.raw_iq)) - np.min(np.abs(data.raw_iq))
             offset = np.min(np.abs(data.raw_iq))
-            from ..tools.fitting import lorfunc
-            x_fit = np.linspace(x[0], x[-1], 400)
-            fit_y = lorfunc(x_fit, offset, -amp, f0, kappa / 2)
+            fit_params = np.array([offset, -amp, f0, kappa / 2])
         else:
-            fit_y = None
+            fit_params = None
+
         title = "Resonator Spectroscopy"
-        if f0:
-            title += f"  |  f0 = {f0:.4f} MHz"
-        if kappa:
-            title += f",  κ = {kappa:.3f} MHz"
+        if f0:    title += f"  |  f0 = {f0:.4f} MHz"
+        if kappa: title += f",  κ = {kappa:.3f} MHz"
+
+        lines = []
+        if f0:    lines.append(f"f_res  = {f0:.4f} MHz")
+        if kappa: lines.append(f"κ      = {kappa:.3f} MHz")
+        if Qi:    lines.append(f"Qi     = {int(Qi):,}")
+        if Qc:    lines.append(f"Qc     = {int(Qc):,}")
+        if Ql:    lines.append(f"Ql     = {int(Ql):,}")
+
         self._show_fit(
-            data, fit_y,
-            xlabel="Frequency (MHz)", ylabel="ADC (Abs)",
-            title=title, fit_label="fit",
+            data, lorfunc, fit_params,
+            xlabel="Frequency (MHz)",
+            title=title,
+            result_text="\n".join(lines),
         )
 
     def _lorentzian_fallback(self, data, freqs, iq, original_exc):
@@ -155,16 +162,17 @@ class LorentzianAnalysis(BaseAnalysis):
         if data.fit_params is None:
             return
         from ..tools.fitting import lorfunc
-        x_fit = np.linspace(data.x_axis[0], data.x_axis[-1], 400)
-        f0 = data.fit_result.get("f0_MHz", (None,))[0]
-        kappa = data.fit_result.get("linewidth_MHz", (None,))[0]
+        f0    = data.fit_result.get("f0_MHz",        (None,))[0]
+        kappa = data.fit_result.get("linewidth_MHz",  (None,))[0]
         title = "Qubit Spectroscopy"
-        if f0:
-            title += f"  |  f0 = {f0:.3f} MHz"
-        if kappa:
-            title += f",  κ = {kappa:.3f} MHz"
+        if f0:    title += f"  |  f0 = {f0:.3f} MHz"
+        if kappa: title += f",  κ = {kappa:.3f} MHz"
+        lines = []
+        if f0:    lines.append(f"f0     = {f0:.3f} MHz")
+        if kappa: lines.append(f"κ      = {kappa:.3f} MHz")
         self._show_fit(
-            data, lorfunc(x_fit, *data.fit_params),
-            xlabel="Frequency (MHz)", ylabel="ADC (Abs)",
-            title=title, fit_label=f"f0 = {f0:.3f} MHz" if f0 else "fit",
+            data, lorfunc, data.fit_params,
+            xlabel="Frequency (MHz)",
+            title=title,
+            result_text="\n".join(lines),
         )
