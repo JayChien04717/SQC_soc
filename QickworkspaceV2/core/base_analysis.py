@@ -59,6 +59,49 @@ class BaseAnalysis(ABC):
         data.quality = self._assess_quality(data)
         return data
 
+    def plot(self, data: "ExperimentData") -> None:
+        """
+        Show a fit overlay figure after analysis.  Override in subclasses.
+        """
+        pass
+
+    # ── Helper ───────────────────────────────────────────────────────────────
+
+    def _show_fit(
+        self,
+        data: "ExperimentData",
+        fit_y,
+        *,
+        xlabel: str = "x",
+        ylabel: str = "ADC (Abs)",
+        title: str = "",
+        fit_label: str = "fit",
+        extra_lines=None,
+    ) -> None:
+        """Plot raw data + fit curve in a single figure."""
+        import numpy as np
+        import matplotlib.pyplot as plt
+
+        if data.x_axis is None or data.raw_iq is None:
+            return
+        x = data.x_axis
+        y = np.abs(data.raw_iq)
+
+        fig, ax = plt.subplots(figsize=(7, 3))
+        ax.plot(x, y, "o", ms=4, alpha=0.7, label="data")
+        if fit_y is not None:
+            ax.plot(x if len(fit_y) == len(x) else np.linspace(x[0], x[-1], len(fit_y)),
+                    fit_y, "r-", lw=1.5, label=fit_label)
+        if extra_lines:
+            for kw in extra_lines:
+                ax.axvline(**kw)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.legend(fontsize=9)
+        plt.tight_layout()
+        plt.show()
+
     @abstractmethod
     def _run(self, data: "ExperimentData") -> None:
         """

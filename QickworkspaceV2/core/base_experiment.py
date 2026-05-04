@@ -254,7 +254,9 @@ class BaseExperiment:
 
         # ── Run registered Analysis class ────────────────────────────────────
         if self.Analysis is not None:
-            result = self.Analysis().run(result)
+            analysis_inst = self.Analysis()
+            result = analysis_inst.run(result)
+            analysis_inst.plot(result)
 
         self.result = result
         return result

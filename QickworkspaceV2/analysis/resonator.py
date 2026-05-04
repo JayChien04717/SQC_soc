@@ -45,7 +45,7 @@ class ResonatorSpecAnalysis(BaseAnalysis):
             Ql = round(f0 / kappa) if kappa > 0 else 0
 
             data.fit_result = {
-                "f0_GHz": (round(f0 / 1e9, 6), None),
+                "f_res[MHz]": (round(f0 / 1e6, 4), None),
                 "Qi": (Qi, None),
                 "Qc": (Qc, None),
                 "Ql": (Ql, None),
@@ -57,10 +57,41 @@ class ResonatorSpecAnalysis(BaseAnalysis):
             # Fall back to Lorentzian
             self._lorentzian_fallback(data, freqs, iq, exc)
 
+    def plot(self, data: ExperimentData) -> None:
+        if data.x_axis is None or data.raw_iq is None:
+            return
+        # Build a Lorentzian overlay from fit_result
+        f0 = (data.fit_result.get("f_res[MHz]") or data.fit_result.get("f0_MHz") or (None,))[0]
+        kappa = data.fit_result.get("kappa_MHz", (None,))[0]
+        if data.fit_params is not None:
+            from ..tools.fitting import lorfunc
+            x_fit = np.linspace(data.x_axis[0], data.x_axis[-1], 400)
+            fit_y = lorfunc(x_fit, *data.fit_params)
+        elif f0 is not None and kappa is not None:
+            # Reconstruct approximate Lorentzian from ABCD result
+            x = data.x_axis
+            amp = np.max(np.abs(data.raw_iq)) - np.min(np.abs(data.raw_iq))
+            offset = np.min(np.abs(data.raw_iq))
+            from ..tools.fitting import lorfunc
+            x_fit = np.linspace(x[0], x[-1], 400)
+            fit_y = lorfunc(x_fit, offset, -amp, f0, kappa / 2)
+        else:
+            fit_y = None
+        title = "Resonator Spectroscopy"
+        if f0:
+            title += f"  |  f0 = {f0:.4f} MHz"
+        if kappa:
+            title += f",  κ = {kappa:.3f} MHz"
+        self._show_fit(
+            data, fit_y,
+            xlabel="Frequency (MHz)", ylabel="ADC (Abs)",
+            title=title, fit_label="fit",
+        )
+
     def _lorentzian_fallback(self, data, freqs, iq, original_exc):
         """Fit a Lorentzian if circle fit fails."""
         try:
-            from ..tools.fitting import fitlor, lorfunc
+            from ..tools.fitting import fitlor
 
             popt, pcov, _ = fitlor(freqs, np.abs(iq))
             err = np.sqrt(np.diag(pcov))
@@ -71,7 +102,9 @@ class ResonatorSpecAnalysis(BaseAnalysis):
                 "kappa_MHz": (abs(popt[1]), err[1]),
             }
             data.scalar_result = popt[2]
-            data.quality_message = f"circle fit failed ({original_exc}); used Lorentzian"
+            data.quality_message = (
+                f"circle fit failed ({original_exc}); used Lorentzian"
+            )
         except Exception:
             data.quality = QualityFlag.BAD
             data.quality_message = f"all fits failed: {original_exc}"
@@ -98,7 +131,7 @@ class LorentzianAnalysis(BaseAnalysis):
     def _run(self, data: ExperimentData) -> None:
         if data.x_axis is None or data.raw_iq is None:
             return
-        from ..tools.fitting import fitlor, lorfunc
+        from ..tools.fitting import fitlor
 
         x = data.x_axis
         y = np.abs(data.raw_iq)
@@ -117,3 +150,21 @@ class LorentzianAnalysis(BaseAnalysis):
         except Exception as exc:
             data.quality = QualityFlag.BAD
             data.quality_message = f"Lorentzian fit failed: {exc}"
+
+    def plot(self, data: ExperimentData) -> None:
+        if data.fit_params is None:
+            return
+        from ..tools.fitting import lorfunc
+        x_fit = np.linspace(data.x_axis[0], data.x_axis[-1], 400)
+        f0 = data.fit_result.get("f0_MHz", (None,))[0]
+        kappa = data.fit_result.get("linewidth_MHz", (None,))[0]
+        title = "Qubit Spectroscopy"
+        if f0:
+            title += f"  |  f0 = {f0:.3f} MHz"
+        if kappa:
+            title += f",  κ = {kappa:.3f} MHz"
+        self._show_fit(
+            data, lorfunc(x_fit, *data.fit_params),
+            xlabel="Frequency (MHz)", ylabel="ADC (Abs)",
+            title=title, fit_label=f"f0 = {f0:.3f} MHz" if f0 else "fit",
+        )

@@ -43,6 +43,19 @@ class T1Analysis(BaseAnalysis):
             data.quality = QualityFlag.BAD
             data.quality_message = f"T1 fit failed: {exc}"
 
+    def plot(self, data: ExperimentData) -> None:
+        if data.fit_params is None:
+            return
+        from ..tools.fitting import expfunc
+        x_fit = np.linspace(data.x_axis[0], data.x_axis[-1], 400)
+        T1 = data.fit_result.get("T1_us", (None,))[0]
+        self._show_fit(
+            data, expfunc(x_fit, *data.fit_params),
+            xlabel="Wait time (µs)", ylabel="ADC (Abs)",
+            title=f"T1 Relaxation  |  T1 = {T1:.2f} µs" if T1 else "T1 Relaxation",
+            fit_label=f"T1 = {T1:.2f} µs" if T1 else "fit",
+        )
+
 
 # ── Ramsey ────────────────────────────────────────────────────────────────────
 
@@ -111,6 +124,31 @@ class RamseyAnalysis(BaseAnalysis):
             data.quality = QualityFlag.BAD
             data.quality_message = f"Ramsey exp fit failed: {exc}"
 
+    def plot(self, data: ExperimentData) -> None:
+        if data.fit_params is None:
+            return
+        x_fit = np.linspace(data.x_axis[0], data.x_axis[-1], 400)
+        T2r = data.fit_result.get("T2r_us", (None,))[0]
+        detune = data.fit_result.get("detune_MHz", (None,))[0]
+        title = "Ramsey"
+        if T2r:
+            title += f"  |  T2* = {T2r:.2f} µs"
+        if detune:
+            title += f",  detune = {detune:.3f} MHz"
+        ramsey_freq = data.config.get("ramsey_freq", 0.0)
+        if ramsey_freq != 0:
+            from ..tools.fitting import decaysin
+            fit_y = decaysin(x_fit, *data.fit_params)
+        else:
+            from ..tools.fitting import expfunc
+            fit_y = expfunc(x_fit, *data.fit_params)
+        self._show_fit(
+            data, fit_y,
+            xlabel="Free evolution time (µs)", ylabel="ADC (Abs)",
+            title=title,
+            fit_label=f"T2* = {T2r:.2f} µs" if T2r else "fit",
+        )
+
 
 # ── SpinEcho ──────────────────────────────────────────────────────────────────
 
@@ -153,6 +191,25 @@ class SpinEchoAnalysis(BaseAnalysis):
             data.quality = QualityFlag.BAD
             data.quality_message = f"SpinEcho fit failed: {exc}"
 
+    def plot(self, data: ExperimentData) -> None:
+        if data.fit_params is None:
+            return
+        x_fit = np.linspace(data.x_axis[0], data.x_axis[-1], 400)
+        T2e = data.fit_result.get("T2e_us", (None,))[0]
+        ramsey_freq = data.config.get("ramsey_freq", 0.0)
+        if ramsey_freq != 0:
+            from ..tools.fitting import decaysin
+            fit_y = decaysin(x_fit, *data.fit_params)
+        else:
+            from ..tools.fitting import expfunc
+            fit_y = expfunc(x_fit, *data.fit_params)
+        self._show_fit(
+            data, fit_y,
+            xlabel="Echo time (µs)", ylabel="ADC (Abs)",
+            title=f"Spin Echo  |  T2E = {T2e:.2f} µs" if T2e else "Spin Echo",
+            fit_label=f"T2E = {T2e:.2f} µs" if T2e else "fit",
+        )
+
 
 # ── PowerRabi ─────────────────────────────────────────────────────────────────
 
@@ -186,6 +243,25 @@ class PowerRabiAnalysis(BaseAnalysis):
             data.quality = QualityFlag.BAD
             data.quality_message = f"PowerRabi fit failed: {exc}"
 
+    def plot(self, data: ExperimentData) -> None:
+        if data.fit_params is None:
+            return
+        from ..tools.fitting import decaysin
+        x_fit = np.linspace(data.x_axis[0], data.x_axis[-1], 400)
+        pi_gain = data.fit_result.get("pi_gain", (None,))[0]
+        pi2_gain = data.fit_result.get("pi2_gain", (None,))[0]
+        extra = []
+        if pi_gain:
+            extra.append({"x": pi_gain, "color": "r", "ls": "--", "lw": 1, "label": f"π={pi_gain:.4f}"})
+        if pi2_gain:
+            extra.append({"x": pi2_gain, "color": "g", "ls": "--", "lw": 1, "label": f"π/2={pi2_gain:.4f}"})
+        self._show_fit(
+            data, decaysin(x_fit, *data.fit_params),
+            xlabel="Gain (a.u.)", ylabel="ADC (Abs)",
+            title=f"Power Rabi  |  π gain = {pi_gain:.4f}" if pi_gain else "Power Rabi",
+            fit_label="fit", extra_lines=extra,
+        )
+
 
 # ── TimeRabi ──────────────────────────────────────────────────────────────────
 
@@ -214,6 +290,19 @@ class TimeRabiAnalysis(BaseAnalysis):
         except Exception as exc:
             data.quality = QualityFlag.BAD
             data.quality_message = f"TimeRabi fit failed: {exc}"
+
+    def plot(self, data: ExperimentData) -> None:
+        if data.fit_params is None:
+            return
+        from ..tools.fitting import decaysin
+        x_fit = np.linspace(data.x_axis[0], data.x_axis[-1], 400)
+        pi_len = data.fit_result.get("pi_length_us", (None,))[0]
+        self._show_fit(
+            data, decaysin(x_fit, *data.fit_params),
+            xlabel="Pulse length (µs)", ylabel="ADC (Abs)",
+            title=f"Time Rabi  |  π time = {pi_len:.3f} µs" if pi_len else "Time Rabi",
+            fit_label=f"π = {pi_len:.3f} µs" if pi_len else "fit",
+        )
 
 
 # ── QubitTemp ─────────────────────────────────────────────────────────────────
