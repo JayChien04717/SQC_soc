@@ -58,16 +58,44 @@ class ResonatorSpecAnalysis(BaseAnalysis):
             self._lorentzian_fallback(data, freqs, iq, exc)
 
     def plot(self, data: ExperimentData) -> None:
+        import matplotlib.pyplot as plt
+
         if data.x_axis is None or data.raw_iq is None:
             return
-        from ..tools.fitting import lorfunc
+
         f0    = (data.fit_result.get("f_res[MHz]") or data.fit_result.get("f0_MHz") or (None,))[0]
         kappa = data.fit_result.get("kappa_MHz", (None,))[0]
         Qi    = data.fit_result.get("Qi",  (None,))[0]
         Qc    = data.fit_result.get("Qc",  (None,))[0]
         Ql    = data.fit_result.get("Ql",  (None,))[0]
 
-        # Build fit_params for lorfunc if ABCD succeeded (no fit_params stored)
+        title = "Resonator Spectroscopy"
+        if f0:    title += f"  |  f_res = {f0:.4f} MHz"
+        if kappa: title += f",  κ = {kappa:.3f} MHz"
+
+        # ── Preferred: native ABCD circle-fit plot ────────────────────────────
+        # Lorentzian fallback (data.fit_params set) → use our standard panel
+        if data.fit_params is None:
+            try:
+                try:
+                    from abcd_rf_fit import analyze
+                except ImportError:
+                    from ..tools.abcd_rf_fit.abcd_rf_fit import analyze
+
+                solve_type = data.config.get("_solve_type", "hm")
+                fit_obj = analyze(
+                    data.x_axis * 1e6, data.raw_iq, solve_type, fit_edelay=True
+                )
+                fit_obj.plot(title=title)
+                plt.tight_layout()
+                plt.show()
+                return
+            except Exception:
+                pass  # fall through to Lorentzian panel
+
+        # ── Fallback: standard Lorentzian 2×3 panel ──────────────────────────
+        from ..tools.fitting import lorfunc
+
         if data.fit_params is not None:
             fit_params = data.fit_params
         elif f0 is not None and kappa is not None:
@@ -76,10 +104,6 @@ class ResonatorSpecAnalysis(BaseAnalysis):
             fit_params = np.array([offset, -amp, f0, kappa / 2])
         else:
             fit_params = None
-
-        title = "Resonator Spectroscopy"
-        if f0:    title += f"  |  f0 = {f0:.4f} MHz"
-        if kappa: title += f",  κ = {kappa:.3f} MHz"
 
         lines = []
         if f0:    lines.append(f"f_res  = {f0:.4f} MHz")
