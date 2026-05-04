@@ -103,7 +103,17 @@ class ExperimentData:
         yield self.fit_errors
 
     def __getitem__(self, idx):
-        """Support ``result[0]`` (fit_params) and ``result[1]`` (fit_errors)."""
+        """
+        String key  → ``result['pi_gain']``  shortcut for ``fit_result['pi_gain'][0]``.
+        Integer idx → ``result[0]`` (fit_params), ``result[1]`` (fit_errors).
+        """
+        if isinstance(idx, str):
+            entry = self.fit_result.get(idx)
+            if entry is None:
+                raise KeyError(
+                    f"'{idx}' not in fit_result. Available: {list(self.fit_result)}"
+                )
+            return entry[0] if isinstance(entry, (tuple, list)) else entry
         return (self.fit_params, self.fit_errors)[idx]
 
     def __float__(self):
