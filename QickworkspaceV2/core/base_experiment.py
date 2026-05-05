@@ -171,11 +171,11 @@ class BaseExperiment:
             prog = _MockProgram(self.cfg, self.EXPT_NAME)
         else:
             prog = self._create_program()
-        self._sweep_vals_x = self._resolve_axis(
-            self._extract_sweep_axis(prog), steps=self.cfg.get("steps")
+        self._sweep_vals_x = BaseExperiment._resolve_axis(
+            self._extract_sweep_axis(prog), self.cfg.get("steps")
         )
-        self._sweep_vals_y = self._resolve_axis(
-            self._extract_sweep_axis_y(prog), steps=self.cfg.get("steps")
+        self._sweep_vals_y = BaseExperiment._resolve_axis(
+            self._extract_sweep_axis_y(prog), self.cfg.get("steps")
         )
 
         yoko_value_kwarg = kwargs.get("yoko_value")
@@ -325,50 +325,74 @@ class BaseExperiment:
         """
         Convert whatever _extract_sweep_axis returns into a plain float array.
 
-        QICK v2's get_pulse_param / get_time_param may return a QickParam
-        object (or an array of them) rather than a numpy float array.
-        This method handles all cases:
+        Handles all forms that QICK v2 may return:
           - None              → None
-          - QickParam         → calls .to_array()
-          - QickSweep1D       → np.linspace(start, stop, steps)
-          - object array      → resolves element-wise
-          - numeric array     → astype(float) passthrough
+          - numpy float array → passthrough
+          - QickParam         → .to_array() if available, or start/stop/expts
+          - QickSweep1D       → np.linspace(start, stop, steps) using config steps
+          - plain list/array  → np.asarray(float)
+          - object array      → element-wise resolution
+
+        Always call as BaseExperiment._resolve_axis(vals, steps) — do NOT call
+        via self._resolve_axis(vals, steps=…) to avoid descriptor ambiguity.
         """
         if vals is None:
             return None
         # Already a plain numpy numeric array
         if isinstance(vals, np.ndarray) and np.issubdtype(vals.dtype, np.number):
             return vals.astype(float)
-        # QickParam: has to_array() (compiled sweep object)
+        # QickParam / QickSweep1D: has to_array()
         if hasattr(vals, 'to_array'):
             return np.asarray(vals.to_array(), dtype=float)
-        # QickSweep1D-like: start + stop but no to_array (pre-compile object)
-        if hasattr(vals, 'start') and hasattr(vals, 'stop'):
+        # QickParam with expts (compiled sweep, may be in register units)
+        if hasattr(vals, 'is_sweep') and callable(vals.is_sweep) and vals.is_sweep():
+            expts = getattr(vals, 'expts', None)
+            start = getattr(vals, 'start', None)
+            stop  = getattr(vals, 'stop',  None)
+            step  = getattr(vals, 'step',  None)
+            n = int(expts) if expts is not None else (int(steps) if steps else 100)
+            if start is not None and stop is not None:
+                try:
+                    return np.linspace(float(start), float(stop), n)
+                except (TypeError, ValueError, RuntimeError):
+                    pass
+            if start is not None and step is not None:
+                try:
+                    return float(start) + np.arange(n) * float(step)
+                except (TypeError, ValueError, RuntimeError):
+                    pass
+        # QickSweep1D-like with start + stop (pre-compile, physical units)
+        if hasattr(vals, 'start') and hasattr(vals, 'stop') and getattr(vals, 'stop', None) is not None:
             n = int(steps) if steps is not None else 100
-            return np.linspace(float(vals.start), float(vals.stop), n)
+            try:
+                return np.linspace(float(vals.start), float(vals.stop), n)
+            except (TypeError, ValueError, RuntimeError):
+                pass
         # Plain scalar
         if isinstance(vals, (int, float)):
             return np.array([float(vals)])
-        # Try direct numpy conversion (handles plain lists/tuples)
+        # Try direct numpy conversion — catch RuntimeError from QickParam.__float__
         try:
-            arr = np.asarray(vals, dtype=float)
-            return arr
-        except (TypeError, ValueError):
+            return np.asarray(vals, dtype=float)
+        except (TypeError, ValueError, RuntimeError):
             pass
         # Object array: resolve element-wise
-        obj_arr = np.asarray(vals)
-        resolved = []
-        for v in obj_arr.flat:
-            if hasattr(v, 'to_array'):
-                resolved.extend(np.asarray(v.to_array(), dtype=float).tolist())
-            elif hasattr(v, 'start') and hasattr(v, 'stop') and steps:
-                n = int(steps)
-                resolved.extend(np.linspace(float(v.start), float(v.stop), n).tolist())
-            elif hasattr(v, 'start'):
-                resolved.append(float(v.start))
-            else:
-                resolved.append(float(v))
-        return np.array(resolved)
+        try:
+            obj_arr = np.asarray(vals)
+            resolved = []
+            for v in obj_arr.flat:
+                if hasattr(v, 'to_array'):
+                    resolved.extend(np.asarray(v.to_array(), dtype=float).tolist())
+                elif hasattr(v, 'start') and hasattr(v, 'stop') and steps:
+                    resolved.extend(np.linspace(float(v.start), float(v.stop), int(steps)).tolist())
+                elif hasattr(v, 'start'):
+                    resolved.append(float(v.start))
+                else:
+                    resolved.append(float(v))
+            return np.array(resolved)
+        except Exception:
+            pass
+        raise ValueError(f"Cannot resolve sweep axis from {type(vals).__name__}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # Subclass MUST override

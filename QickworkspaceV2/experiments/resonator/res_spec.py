@@ -52,7 +52,13 @@ class ResonatorSpec(BaseExperiment):
         )
 
     def _extract_sweep_axis(self, prog):
-        return prog.get_pulse_param("res_pulse", "freq", as_array=True)
+        # Frequency params from get_pulse_param are in hardware register units.
+        # Use the QickSweep1D from config which is always in MHz.
+        sweep = self.cfg.get("res_freq_ge")
+        steps = int(self.cfg.get("steps", 100))
+        if hasattr(sweep, 'start') and hasattr(sweep, 'stop'):
+            return np.linspace(float(sweep.start), float(sweep.stop), steps)
+        return np.array([float(sweep)])
 
     def run(self, py_avg, solve_type="hm", **kwargs):
         """Run resonator spectroscopy.  ``solve_type`` passed to circle fit."""

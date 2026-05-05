@@ -56,7 +56,11 @@ class QubitSpec(BaseExperiment):
         )
 
     def _extract_sweep_axis(self, prog):
-        return prog.get_pulse_param("qb_pulse", "freq", as_array=True)
+        sweep = self.cfg.get("qb_freq_ge")
+        steps = int(self.cfg.get("steps", 100))
+        if hasattr(sweep, 'start') and hasattr(sweep, 'stop'):
+            return np.linspace(float(sweep.start), float(sweep.stop), steps)
+        return np.array([float(sweep)])
 
     def _save_comment(self, dict_val):
         if self.result is not None:
@@ -119,7 +123,11 @@ class QubitSpecFlux(BaseExperiment):
         )
 
     def _extract_sweep_axis(self, prog):
-        return prog.get_pulse_param("qb_pulse", "freq", as_array=True)
+        sweep = self.cfg.get("qb_freq_ge")
+        steps = int(self.cfg.get("steps", 100))
+        if hasattr(sweep, 'start') and hasattr(sweep, 'stop'):
+            return np.linspace(float(sweep.start), float(sweep.stop), steps)
+        return np.array([float(sweep)])
 
     def _extract_sweep_axis_y(self, prog):
         yoko_val = self.cfg.get("yoko_value")
