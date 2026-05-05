@@ -22,17 +22,14 @@ import numpy as np
 
 from .base_backend import BaseBackend
 
-
 # ── Mock SoC objects ──────────────────────────────────────────────────────────
+
 
 class _MockSoCCfg:
     """Minimal mock of QickConfig needed by BaseProgram helpers."""
 
     def __init__(self):
-        self._gens = [
-            {"type": "axis_signal_gen_v6", "maxlen": 65536}
-            for _ in range(8)
-        ]
+        self._gens = [{"type": "axis_signal_gen_v6", "maxlen": 65536} for _ in range(8)]
         self._readouts = [{"tproc_ctrl": 0} for _ in range(4)]
 
     def __getitem__(self, key):
@@ -52,7 +49,9 @@ class _MockSoCCfg:
 class _MockSoC:
     """Minimal mock of QickSoc — provides acquire() interface."""
 
-    is_simulated = True  # sentinel checked by BaseExperiment to skip real program creation
+    is_simulated = (
+        True  # sentinel checked by BaseExperiment to skip real program creation
+    )
 
     def __init__(self, noise_level: float = 0.02):
         self.noise_level = noise_level
@@ -64,10 +63,13 @@ class _MockSoC:
 
 # ── Synthetic data generators ─────────────────────────────────────────────────
 
+
 def _make_lorentzian(freqs, f0, kappa, amp=1.0, noise=0.02):
     """Complex Lorentzian transmission (resonator spectroscopy)."""
     signal = amp / (1 + 2j * (freqs - f0) / kappa)
-    return signal + noise * (np.random.randn(*freqs.shape) + 1j * np.random.randn(*freqs.shape))
+    return signal + noise * (
+        np.random.randn(*freqs.shape) + 1j * np.random.randn(*freqs.shape)
+    )
 
 
 def _make_decaysin(times, amp, freq, phase, tau, noise=0.02):
@@ -84,11 +86,12 @@ def _make_expfunc(times, amp, offset, tau, noise=0.02):
 
 def _make_rabi(gains, pi_gain, noise=0.02):
     """Rabi oscillation (PowerRabi)."""
-    signal = -np.cos(np.pi * gains / pi_gain)
+    signal = np.cos(np.pi * gains / pi_gain)
     return signal + noise * np.random.randn(*gains.shape)
 
 
 # ── Mock program wrapper ───────────────────────────────────────────────────────
+
 
 class _MockProgram:
     """
@@ -174,6 +177,7 @@ class _MockProgram:
 
 
 # ── SimulatedBackend ──────────────────────────────────────────────────────────
+
 
 class SimulatedBackend(BaseBackend):
     """

@@ -24,10 +24,7 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-import numpy as np
-
 from .experiment_data import ExperimentData, QualityFlag
-from .base_experiment import BaseExperiment
 
 
 class BatchExperiment:
@@ -80,6 +77,7 @@ class BatchExperiment:
         results : dict
             Mapping ``experiment_type → ExperimentData``.
         """
+        import time
         import uuid
 
         batch_id = str(uuid.uuid4())[:8]
@@ -87,9 +85,9 @@ class BatchExperiment:
 
         for i, (label, expt) in enumerate(self._named):
             expt_name = label or expt.EXPT_NAME or expt.__class__.__name__
-            print(f"\n{'='*60}")
-            print(f"  BatchExperiment [{i+1}/{len(self.experiments)}] — {expt_name}")
-            print(f"{'='*60}")
+            print(f"\n{'=' * 60}")
+            print(f"  BatchExperiment [{i + 1}/{len(self.experiments)}] — {expt_name}")
+            print(f"{'=' * 60}")
 
             result = expt.run(py_avg=py_avg, **kwargs)
             result.parent_id = batch_id
@@ -101,19 +99,19 @@ class BatchExperiment:
                     f"({result.quality_message})"
                 )
                 break
-
+            time.sleep(0.5)
         return self.results
 
     def summary(self):
         """Print a quality summary table for all completed experiments."""
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print("  BatchExperiment Summary")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
         for name, result in self.results.items():
             flag = result.quality.value.upper()
             msg = f" — {result.quality_message}" if result.quality_message else ""
             print(f"  {name:<40s} [{flag}]{msg}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
 
 class ParallelExperiment:
