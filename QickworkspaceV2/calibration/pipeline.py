@@ -96,8 +96,8 @@ class AutoCalibrate:
             ])
             expt = ResonatorSpec(run_cfg)
             result: ExperimentData = expt.run(py_avg, solve_type="hm")
-            if result.fit_result and result.fit_result.get("f0_Hz") is not None:
-                freq_mhz = round(result.fit_result["f0_Hz"] / 1e6, 4)
+            if result.scalar_result is not None:
+                freq_mhz = round(float(result.scalar_result), 4)
                 self._update("res_freq_ge", freq_mhz)
                 self.results["res_freq_ge"] = freq_mhz
                 self._log("res_spec", f"res_freq_ge = {freq_mhz} MHz")
@@ -154,8 +154,8 @@ class AutoCalibrate:
             result: ExperimentData = expt.run(py_avg)
             if result.fit_result.get("pi_gain") is None:
                 raise RuntimeError("power_rabi: fit returned None")
-            pi_gain  = float(result.fit_result["pi_gain"])
-            pi2_gain = float(result.fit_result["pi2_gain"])
+            pi_gain  = float(result["pi_gain"])
+            pi2_gain = float(result["pi2_gain"])
             if 0.15 <= pi_gain <= 0.90:
                 self._update("pi_gain_ge",  round(pi_gain,  6))
                 self._update("pi2_gain_ge", round(pi2_gain, 6))

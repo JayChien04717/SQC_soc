@@ -171,12 +171,16 @@ class BaseExperiment:
             prog = _MockProgram(self.cfg, self.EXPT_NAME)
         else:
             prog = self._create_program()
-        self._sweep_vals_x = self._extract_sweep_axis(prog)
-        self._sweep_vals_y = self._extract_sweep_axis_y(prog)
+        self._sweep_vals_x = self._resolve_axis(
+            self._extract_sweep_axis(prog), steps=self.cfg.get("steps")
+        )
+        self._sweep_vals_y = self._resolve_axis(
+            self._extract_sweep_axis_y(prog), steps=self.cfg.get("steps")
+        )
 
         yoko_value_kwarg = kwargs.get("yoko_value")
         if yoko_value_kwarg is not None:
-            self._sweep_vals_y = np.asarray(yoko_value_kwarg)
+            self._sweep_vals_y = np.asarray(yoko_value_kwarg, dtype=float)
 
         yoko_addr = kwargs.get("yoko_inst_addr") or kwargs.get("yoko_inst")
 
@@ -311,6 +315,60 @@ class BaseExperiment:
             tag=self.TAG,
         )
         print(f"Data saved to {file_path}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # Internal helpers
+    # ══════════════════════════════════════════════════════════════════════════
+
+    @staticmethod
+    def _resolve_axis(vals, steps=None):
+        """
+        Convert whatever _extract_sweep_axis returns into a plain float array.
+
+        QICK v2's get_pulse_param / get_time_param may return a QickParam
+        object (or an array of them) rather than a numpy float array.
+        This method handles all cases:
+          - None              → None
+          - QickParam         → calls .to_array()
+          - QickSweep1D       → np.linspace(start, stop, steps)
+          - object array      → resolves element-wise
+          - numeric array     → astype(float) passthrough
+        """
+        if vals is None:
+            return None
+        # Already a plain numpy numeric array
+        if isinstance(vals, np.ndarray) and np.issubdtype(vals.dtype, np.number):
+            return vals.astype(float)
+        # QickParam: has to_array() (compiled sweep object)
+        if hasattr(vals, 'to_array'):
+            return np.asarray(vals.to_array(), dtype=float)
+        # QickSweep1D-like: start + stop but no to_array (pre-compile object)
+        if hasattr(vals, 'start') and hasattr(vals, 'stop'):
+            n = int(steps) if steps is not None else 100
+            return np.linspace(float(vals.start), float(vals.stop), n)
+        # Plain scalar
+        if isinstance(vals, (int, float)):
+            return np.array([float(vals)])
+        # Try direct numpy conversion (handles plain lists/tuples)
+        try:
+            arr = np.asarray(vals, dtype=float)
+            return arr
+        except (TypeError, ValueError):
+            pass
+        # Object array: resolve element-wise
+        obj_arr = np.asarray(vals)
+        resolved = []
+        for v in obj_arr.flat:
+            if hasattr(v, 'to_array'):
+                resolved.extend(np.asarray(v.to_array(), dtype=float).tolist())
+            elif hasattr(v, 'start') and hasattr(v, 'stop') and steps:
+                n = int(steps)
+                resolved.extend(np.linspace(float(v.start), float(v.stop), n).tolist())
+            elif hasattr(v, 'start'):
+                resolved.append(float(v.start))
+            else:
+                resolved.append(float(v))
+        return np.array(resolved)
 
     # ══════════════════════════════════════════════════════════════════════════
     # Subclass MUST override
