@@ -166,6 +166,12 @@ class BaseExperiment:
             self.IQ_PROCESS = iq_process
 
         self._yoko_mode = kwargs.get("yoko_mode", None)
+        # Snapshot config BEFORE _create_program: QICK mutates the dict in-place,
+        # replacing QickSweep1D (MHz) with compiled QickParam (register units).
+        try:
+            self._cfg_snap = dict(self.cfg)
+        except Exception:
+            self._cfg_snap = None
         if getattr(self.soc, "is_simulated", False):
             from ..backend.simulated_backend import _MockProgram
             prog = _MockProgram(self.cfg, self.EXPT_NAME)

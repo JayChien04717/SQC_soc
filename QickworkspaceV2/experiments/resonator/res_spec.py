@@ -52,10 +52,11 @@ class ResonatorSpec(BaseExperiment):
         )
 
     def _extract_sweep_axis(self, prog):
-        # Frequency params from get_pulse_param are in hardware register units.
-        # Use the QickSweep1D from config which is always in MHz.
-        sweep = self.cfg.get("res_freq_ge")
-        steps = int(self.cfg.get("steps", 100))
+        # QICK mutates cfg in _create_program, replacing QickSweep1D (MHz)
+        # with a compiled QickParam (register units). Use the pre-compile snapshot.
+        cfg = self._cfg_snap if self._cfg_snap is not None else self.cfg
+        sweep = cfg.get("res_freq_ge")
+        steps = int(cfg.get("steps", 100))
         if hasattr(sweep, 'start') and hasattr(sweep, 'stop'):
             return np.linspace(float(sweep.start), float(sweep.stop), steps)
         return np.array([float(sweep)])

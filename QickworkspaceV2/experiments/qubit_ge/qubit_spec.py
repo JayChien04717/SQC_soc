@@ -56,8 +56,9 @@ class QubitSpec(BaseExperiment):
         )
 
     def _extract_sweep_axis(self, prog):
-        sweep = self.cfg.get("qb_freq_ge")
-        steps = int(self.cfg.get("steps", 100))
+        cfg = self._cfg_snap if self._cfg_snap is not None else self.cfg
+        sweep = cfg.get("qb_freq_ge")
+        steps = int(cfg.get("steps", 100))
         if hasattr(sweep, 'start') and hasattr(sweep, 'stop'):
             return np.linspace(float(sweep.start), float(sweep.stop), steps)
         return np.array([float(sweep)])
@@ -123,8 +124,9 @@ class QubitSpecFlux(BaseExperiment):
         )
 
     def _extract_sweep_axis(self, prog):
-        sweep = self.cfg.get("qb_freq_ge")
-        steps = int(self.cfg.get("steps", 100))
+        cfg = self._cfg_snap if self._cfg_snap is not None else self.cfg
+        sweep = cfg.get("qb_freq_ge")
+        steps = int(cfg.get("steps", 100))
         if hasattr(sweep, 'start') and hasattr(sweep, 'stop'):
             return np.linspace(float(sweep.start), float(sweep.stop), steps)
         return np.array([float(sweep)])
