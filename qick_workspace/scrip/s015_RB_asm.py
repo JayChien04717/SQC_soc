@@ -12,21 +12,35 @@ ASMv2 open_loop + register-based gate dispatch。
 
 本版（ASMv2 dispatch）：
     _initialize()  →  add_reg("gate_code")   ← gate_idx 由 open_loop 自動分配
-    compile_datamem() →  gate_seq 編碼為整數寫入 dmem（不消耗 pmem，無 sentinel）
+    compile_datamem() →  gate_seq 打包：4 個 gate code 存入一個 int32 word
+                         (每個 code 佔 8 bit，位置 0/8/16/24)
     _body() 中：
-        open_loop(N, "gate_idx")         ← 硬體迴圈，gate_idx 自動從 0 遞增到 N-1
-            read_dmem gate_code ← gate_idx          ← 間接定址
+        ; 初始化 word_reg / shift_reg / word_addr
+        open_loop(N, "gate_idx")
+            ; 解碼：gate_code = (word_reg >> shift_reg) & 0xFF
+            write_reg gate_code  word_reg
+            REG_WR    gate_code -op(gate_code ASR shift_reg)
+            REG_WR    gate_code -op(gate_code AND #255)
             cond_jump GATE_I    if gate_code == 0    ← 線性分派
             cond_jump GATE_X    if gate_code == 1
             ...
-        LABEL GATE_X:
-            pulse x180
-            delay(slot)                              ← fixed delay，非 delay_auto
-            jump POST_GATE
-        ...
         LABEL POST_GATE:
-        close_loop()                     ← inc gate_idx，若未完成則跳回 open_loop 標籤
+            ; 更新 shift_reg，每 4 gate 換下一個 word
+            inc_reg   shift_reg 8
+            cond_jump NO_ADVANCE  shift_reg NZ - 32
+            write_reg shift_reg 0
+            inc_reg   word_addr 1
+            read_dmem word_reg  word_addr
+        NO_ADVANCE:
+        close_loop()
         measure
+
+dmem 容量比較
+-------------
+              原版 (1 code/word)   本版 (4 codes/word)
+dmem 容量            4096 gates         16384 gates
+等效最大深度 (RB)    ~2184 Clifford     ~8738 Clifford
+等效最大深度 (IRB)   ~1425 Clifford     ~5700 Clifford
 
 為何用 delay() 而非 delay_auto()
 ---------------------------------
@@ -36,28 +50,49 @@ delay_auto() 在編譯時計算「compile-time timeline 累積值 + t」作為 i
 delay(t) 只編碼 Python 端計算好的固定 t_ticks，不受 compile-time 累積影響，
 適合在 runtime jump table 的各分支中使用。
 
-pmem 大小比較（不同電路深度）
-------------------------------
-          深度 10       深度 50      深度 200
-原版     ~30+10*3     ~30+50*3    ~30+200*3  ← O(N·gate_per_clifford)
-本版     ~50 (固定)    ~50 (固定)  ~50 (固定)  ← O(1)
+pmem / dmem 大小（不受序列長度影響）
+--------------------------------------
+pmem ≈ 120 words (固定)
+dmem = ceil(N_gates / 4) words ← O(N/4)，實際 dmem 用量降為原來 1/4
 
 限制
 ----
 每個 circuit 仍需 recompile（compile_datamem() 是 binprog 的一部分，
 每次 prog.acquire() 都會重新編譯並上傳），無法消除 acquire() call 的數量。
-pmem 恆定是本方案的唯一硬體優勢。
 """
 
 import numpy as np
 import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 
+from qick.asm_v2 import Macro, AsmInst
+
 from .base_program import BaseProgram
 from .RB_generator import single_qb_rb, INTERLEAVE_GATES
 from ..tools.system_cfg import DATA_PATH
 from ..tools.system_tool import hdf5_generator, get_next_filename_labber, config_to_yaml
 from ..tools.fitting import fitrb, rb_func, rb_error, error_fit_err
+
+
+# ── Helper macro ────────────────────────────────────────────────────────────
+class _RegOp(Macro):
+    """Emit: REG_WR dst -op(dst {op} src)  — stores the ALU result in dst.
+
+    The tProc v2 REG_WR instruction supports the full aluList (AND, ASR, SL,
+    OR, …) but the standard Python API (inc_reg / write_reg) only exposes ADD.
+    This helper fills the gap for AND and ASR needed by the bit-unpacking loop.
+
+    Parameters
+    ----------
+    dst : str   destination register name
+    src : int or str   immediate value or source register name
+    op  : str   ALU op string, e.g. ``'AND'``, ``'ASR'``
+    """
+    def expand(self, prog):
+        dst = prog._get_reg(self.dst)
+        src = '#%d' % self.src if isinstance(self.src, int) else prog._get_reg(self.src)
+        return [AsmInst(inst={'CMD': 'REG_WR', 'DST': dst, 'SRC': 'op',
+                              'OP': f'{dst} {self.op} {src}'}, addr_inc=1)]
 
 # ── Gate code encoding ──────────────────────────────────────────────────────
 # I=0, X=1, Y=2, X/2=3, -X/2=4, Y/2=5, -Y/2=6
@@ -103,25 +138,35 @@ class RBAsmProgram(BaseProgram):
         if cfg.get("cooling", False):
             self.apply_cool(cfg)
 
-        # gate_idx register is allocated automatically by open_loop()
-        self.add_reg("gate_code")  # 從 dmem 讀出的 gate 代碼
+        # gate_idx allocated automatically by open_loop()
+        self.add_reg("gate_code")  # unpacked gate code (0-6) from current dmem word
+        self.add_reg("word_reg")   # cached packed dmem word (4 codes × 8 bits)
+        self.add_reg("shift_reg")  # current bit offset within word_reg (0 / 8 / 16 / 24)
+        self.add_reg("word_addr")  # current dmem word index
 
     def compile_datamem(self):
         """
         Override ``QickProgramV2.compile_datamem()`` to statically initialise dmem.
 
-        Encodes the gate sequence as an integer array written to dmem.
-        No sentinel is needed because loop termination is handled by
-        ``open_loop`` / ``close_loop``.
+        Packs 4 gate codes per 32-bit dmem word (8 bits each at bit positions
+        0, 8, 16, 24).  dmem capacity = 4096 words × 4 = 16 384 gate codes,
+        equivalent to ~8 738 Clifford depth for standard RB.
 
         Returns
         -------
-        codes : ndarray of int32
-            dmem initialisation array.
+        packed : ndarray of int32
+            dmem initialisation array, length = ceil(len(gate_seq) / 4).
         """
         gate_seq = self.cfg["gate_seq"]
         codes = [_GATE_CODES[g] for g in gate_seq]
-        return np.array(codes, dtype=np.int32)
+
+        packed = []
+        for i in range(0, len(codes), 4):
+            word = 0
+            for j in range(min(4, len(codes) - i)):
+                word |= (codes[i + j] & 0xFF) << (j * 8)
+            packed.append(word)
+        return np.array(packed, dtype=np.int32)
 
     def _body(self, cfg):
         """Implement the ASMv2 gate-dispatch loop and final measurement."""
@@ -129,19 +174,28 @@ class RBAsmProgram(BaseProgram):
 
         # 使用 delay(slot) 而非 delay_auto()，原因見模組 docstring。
         gate_len = float(cfg[f"sigma_{pfx}"]) * 5   # µs；float() 防止 QickParam 傳入
-        gap      = 0.01                       # µs
+        gap      = 0.01                              # µs
         slot     = gate_len + gap
+        ch       = cfg["qb_ch"]
 
         self.send_readoutconfig(ch=cfg["ro_ch"], name="myro", t=0)
         if cfg.get("cooling", False):
             self.cooling_body(cfg)
 
+        # ── 初始化 bit-unpack 用的 registers（每次 acquire 執行一次）────
+        self.write_reg("shift_reg", 0)
+        self.write_reg("word_addr", 0)
+        self.read_dmem("word_reg", "word_addr")   # 預載第 0 個 word
+
         # ── 硬體迴圈：open_loop 自動分配 gate_idx register ──────────────
         # gate_idx 從 0 遞增到 N-1，close_loop() 負責遞增與跳回。
         self.open_loop(len(cfg["gate_seq"]), name="gate_idx")
 
-        # read_dmem(dst, addr)：從 dmem[gate_idx] 讀值到 gate_code
-        self.read_dmem("gate_code", "gate_idx")
+        # ── 解碼：gate_code = (word_reg >> shift_reg) & 0xFF ────────────
+        # 三條指令；loop 內只能用 delay() 不能用 delay_auto()，但算術指令無此限制。
+        self.write_reg("gate_code", "word_reg")
+        self.append_macro(_RegOp(dst="gate_code", src="shift_reg", op="ASR"))
+        self.append_macro(_RegOp(dst="gate_code", src=0xFF,        op="AND"))
 
         # ── 線性分派鏈（switch-case 等效）────────────────────────────────
         self.cond_jump("GATE_I",   "gate_code", "Z")                   # code 0
@@ -151,7 +205,7 @@ class RBAsmProgram(BaseProgram):
         self.cond_jump("GATE_mX2", "gate_code", "Z", op="-", arg2=4)  # code 4
         self.cond_jump("GATE_Y2",  "gate_code", "Z", op="-", arg2=5)  # code 5
         self.cond_jump("GATE_mY2", "gate_code", "Z", op="-", arg2=6)  # code 6
-        self.jump("POST_GATE")  # safety fallthrough
+        self.jump("POST_GATE")  # safety fallthrough（正常不會走到）
 
         # ── Gate blocks ──────────────────────────────────────────────────
         self.label("GATE_I")
@@ -159,37 +213,45 @@ class RBAsmProgram(BaseProgram):
         self.jump("POST_GATE")
 
         self.label("GATE_X")
-        self.pulse(ch=cfg["qb_ch"], name=f"x180_{pfx}", t=0)
+        self.pulse(ch=ch, name=f"x180_{pfx}", t=0)
         self.delay(slot)
         self.jump("POST_GATE")
 
         self.label("GATE_Y")
-        self.pulse(ch=cfg["qb_ch"], name=f"y180_{pfx}", t=0)
+        self.pulse(ch=ch, name=f"y180_{pfx}", t=0)
         self.delay(slot)
         self.jump("POST_GATE")
 
         self.label("GATE_X2")
-        self.pulse(ch=cfg["qb_ch"], name=f"x90_{pfx}", t=0)
+        self.pulse(ch=ch, name=f"x90_{pfx}", t=0)
         self.delay(slot)
         self.jump("POST_GATE")
 
         self.label("GATE_mX2")
-        self.pulse(ch=cfg["qb_ch"], name=f"x90m_{pfx}", t=0)
+        self.pulse(ch=ch, name=f"x90m_{pfx}", t=0)
         self.delay(slot)
         self.jump("POST_GATE")
 
         self.label("GATE_Y2")
-        self.pulse(ch=cfg["qb_ch"], name=f"y90_{pfx}", t=0)
+        self.pulse(ch=ch, name=f"y90_{pfx}", t=0)
         self.delay(slot)
         self.jump("POST_GATE")
 
         self.label("GATE_mY2")
-        self.pulse(ch=cfg["qb_ch"], name=f"y90m_{pfx}", t=0)
+        self.pulse(ch=ch, name=f"y90m_{pfx}", t=0)
         self.delay(slot)
 
-        # ── close_loop：遞增 gate_idx，若未完成則跳回 open_loop 標籤 ────
+        # ── POST_GATE：更新 bit-unpack counters，然後 close_loop ─────────
         self.label("POST_GATE")
-        self.close_loop()
+        # shift_reg 每 gate 加 8；滿 32（即處理完 4 個 gate）時換下一個 word
+        self.inc_reg("shift_reg", 8)
+        self.cond_jump("NO_WORD_ADVANCE", "shift_reg", "NZ", op="-", arg2=32)
+        self.write_reg("shift_reg", 0)
+        self.inc_reg("word_addr", 1)
+        self.read_dmem("word_reg", "word_addr")
+        self.label("NO_WORD_ADVANCE")
+
+        self.close_loop()   # 遞增 gate_idx；若未完成則跳回 open_loop 標籤
 
         self.delay_auto(0.05)
         self.measure(cfg)
