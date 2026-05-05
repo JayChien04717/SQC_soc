@@ -331,32 +331,38 @@ class BaseExperiment:
         """
         Convert whatever _extract_sweep_axis returns into a plain float array.
 
-        Handles all forms that QICK v2 may return:
-          - None              → None
-          - numpy float array → passthrough
-          - QickParam         → .to_array() if available, or start/stop/expts
-          - QickSweep1D       → np.linspace(start, stop, steps) using config steps
-          - plain list/array  → np.asarray(float)
-          - object array      → element-wise resolution
+        get_pulse_param / get_time_param may return a QickParam sweep object
+        instead of a numpy array, depending on the QICK version.  This method
+        tries every known extraction path and catches RuntimeError from
+        QickParam.__float__.
 
-        Always call as BaseExperiment._resolve_axis(vals, steps) — do NOT call
-        via self._resolve_axis(vals, steps=…) to avoid descriptor ambiguity.
+        Always call as  BaseExperiment._resolve_axis(vals, steps)  (not via
+        self._resolve_axis) to avoid Python descriptor ambiguity.
         """
         if vals is None:
             return None
-        # Already a plain numpy numeric array
+
+        # Already a plain numpy numeric array — fast path
         if isinstance(vals, np.ndarray) and np.issubdtype(vals.dtype, np.number):
             return vals.astype(float)
-        # QickParam / QickSweep1D: has to_array()
-        if hasattr(vals, 'to_array'):
-            return np.asarray(vals.to_array(), dtype=float)
-        # QickParam with expts (compiled sweep, may be in register units)
+
+        # QickParam: try every known array-extraction method
+        for method in ('to_array', 'sweep_vals', 'get_array'):
+            fn = getattr(vals, method, None)
+            if callable(fn):
+                try:
+                    return np.asarray(fn(), dtype=float)
+                except Exception:
+                    pass
+
+        # QickParam with is_sweep(): extract from start/stop/step/expts/steps
         if hasattr(vals, 'is_sweep') and callable(vals.is_sweep) and vals.is_sweep():
-            expts = getattr(vals, 'expts', None)
             start = getattr(vals, 'start', None)
             stop  = getattr(vals, 'stop',  None)
             step  = getattr(vals, 'step',  None)
-            n = int(expts) if expts is not None else (int(steps) if steps else 100)
+            # 'expts' or 'steps' for count
+            n_raw = getattr(vals, 'expts', None) or getattr(vals, 'steps', None)
+            n = int(n_raw) if n_raw is not None else (int(steps) if steps else 100)
             if start is not None and stop is not None:
                 try:
                     return np.linspace(float(start), float(stop), n)
@@ -367,37 +373,60 @@ class BaseExperiment:
                     return float(start) + np.arange(n) * float(step)
                 except (TypeError, ValueError, RuntimeError):
                     pass
-        # QickSweep1D-like with start + stop (pre-compile, physical units)
-        if hasattr(vals, 'start') and hasattr(vals, 'stop') and getattr(vals, 'stop', None) is not None:
+
+        # QickSweep1D-like (start + stop present, no is_sweep)
+        start = getattr(vals, 'start', None)
+        stop  = getattr(vals, 'stop',  None)
+        if start is not None and stop is not None:
             n = int(steps) if steps is not None else 100
             try:
-                return np.linspace(float(vals.start), float(vals.stop), n)
+                return np.linspace(float(start), float(stop), n)
             except (TypeError, ValueError, RuntimeError):
                 pass
-        # Plain scalar
+
+        # Plain Python scalar
         if isinstance(vals, (int, float)):
             return np.array([float(vals)])
-        # Try direct numpy conversion — catch RuntimeError from QickParam.__float__
+
+        # Try direct numpy cast — catches RuntimeError from QickParam.__float__
         try:
             return np.asarray(vals, dtype=float)
         except (TypeError, ValueError, RuntimeError):
             pass
+
         # Object array: resolve element-wise
         try:
             obj_arr = np.asarray(vals)
             resolved = []
             for v in obj_arr.flat:
-                if hasattr(v, 'to_array'):
-                    resolved.extend(np.asarray(v.to_array(), dtype=float).tolist())
-                elif hasattr(v, 'start') and hasattr(v, 'stop') and steps:
-                    resolved.extend(np.linspace(float(v.start), float(v.stop), int(steps)).tolist())
-                elif hasattr(v, 'start'):
-                    resolved.append(float(v.start))
+                for method in ('to_array', 'sweep_vals'):
+                    fn = getattr(v, method, None)
+                    if callable(fn):
+                        try:
+                            resolved.extend(np.asarray(fn(), dtype=float).tolist())
+                            break
+                        except Exception:
+                            pass
                 else:
-                    resolved.append(float(v))
-            return np.array(resolved)
+                    s = getattr(v, 'start', None)
+                    e = getattr(v, 'stop',  None)
+                    if s is not None and e is not None and steps:
+                        resolved.extend(np.linspace(float(s), float(e), int(steps)).tolist())
+                    elif s is not None:
+                        try:
+                            resolved.append(float(s))
+                        except (TypeError, ValueError, RuntimeError):
+                            pass
+                    else:
+                        try:
+                            resolved.append(float(v))
+                        except (TypeError, ValueError, RuntimeError):
+                            pass
+            if resolved:
+                return np.array(resolved)
         except Exception:
             pass
+
         raise ValueError(f"Cannot resolve sweep axis from {type(vals).__name__}")
 
     # ══════════════════════════════════════════════════════════════════════════
