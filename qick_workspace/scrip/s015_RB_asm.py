@@ -12,21 +12,21 @@ ASMv2 open_loop + register-based gate dispatch。
 
 本版（ASMv2 dispatch）：
     _initialize()  →  add_reg("gate_code")   ← gate_idx 由 open_loop 自動分配
-    compile_datamem() →  gate_seq 打包：4 個 gate code 存入一個 int32 word
-                         (每個 code 佔 8 bit，位置 0/8/16/24)
+    compile_datamem() →  gate_seq 打包：8 個 gate code 存入一個 int32 word
+                         (每個 code 佔 4 bit，位置 0/4/8/12/16/20/24/28)
     _body() 中：
         ; 初始化 word_reg / shift_reg / word_addr
         open_loop(N, "gate_idx")
-            ; 解碼：gate_code = (word_reg >> shift_reg) & 0xFF
+            ; 解碼：gate_code = (word_reg >> shift_reg) & 0xF
             write_reg gate_code  word_reg
             REG_WR    gate_code -op(gate_code ASR shift_reg)
-            REG_WR    gate_code -op(gate_code AND #255)
+            REG_WR    gate_code -op(gate_code AND #15)
             cond_jump GATE_I    if gate_code == 0    ← 線性分派
             cond_jump GATE_X    if gate_code == 1
             ...
         LABEL POST_GATE:
-            ; 更新 shift_reg，每 4 gate 換下一個 word
-            inc_reg   shift_reg 8
+            ; 更新 shift_reg，每 8 gate 換下一個 word
+            inc_reg   shift_reg 4
             cond_jump NO_ADVANCE  shift_reg NZ - 32
             write_reg shift_reg 0
             inc_reg   word_addr 1
@@ -37,10 +37,10 @@ ASMv2 open_loop + register-based gate dispatch。
 
 dmem 容量比較
 -------------
-              原版 (1 code/word)   本版 (4 codes/word)
-dmem 容量            4096 gates         16384 gates
-等效最大深度 (RB)    ~2184 Clifford     ~8738 Clifford
-等效最大深度 (IRB)   ~1425 Clifford     ~5700 Clifford
+              原版 (1 code/word)   本版 (8 codes/word)
+dmem 容量            4096 gates         32768 gates
+等效最大深度 (RB)    ~2184 Clifford     ~17476 Clifford
+等效最大深度 (IRB)   ~1425 Clifford     ~11398 Clifford
 
 為何用 delay() 而非 delay_auto()
 ---------------------------------
@@ -53,7 +53,7 @@ delay(t) 只編碼 Python 端計算好的固定 t_ticks，不受 compile-time �
 pmem / dmem 大小（不受序列長度影響）
 --------------------------------------
 pmem ≈ 120 words (固定)
-dmem = ceil(N_gates / 4) words ← O(N/4)，實際 dmem 用量降為原來 1/4
+dmem = ceil(N_gates / 8) words ← O(N/8)，實際 dmem 用量降為原來 1/8
 
 限制
 ----
@@ -140,31 +140,31 @@ class RBAsmProgram(BaseProgram):
 
         # gate_idx allocated automatically by open_loop()
         self.add_reg("gate_code")  # unpacked gate code (0-6) from current dmem word
-        self.add_reg("word_reg")   # cached packed dmem word (4 codes × 8 bits)
-        self.add_reg("shift_reg")  # current bit offset within word_reg (0 / 8 / 16 / 24)
+        self.add_reg("word_reg")   # cached packed dmem word (8 codes × 4 bits)
+        self.add_reg("shift_reg")  # current bit offset within word_reg (0/4/8/.../28)
         self.add_reg("word_addr")  # current dmem word index
 
     def compile_datamem(self):
         """
         Override ``QickProgramV2.compile_datamem()`` to statically initialise dmem.
 
-        Packs 4 gate codes per 32-bit dmem word (8 bits each at bit positions
-        0, 8, 16, 24).  dmem capacity = 4096 words × 4 = 16 384 gate codes,
-        equivalent to ~8 738 Clifford depth for standard RB.
+        Packs 8 gate codes per 32-bit dmem word (4 bits each at bit positions
+        0, 4, 8, …, 28).  dmem capacity = 4096 words × 8 = 32 768 gate codes,
+        equivalent to ~17 476 Clifford depth for standard RB.
 
         Returns
         -------
         packed : ndarray of int32
-            dmem initialisation array, length = ceil(len(gate_seq) / 4).
+            dmem initialisation array, length = ceil(len(gate_seq) / 8).
         """
         gate_seq = self.cfg["gate_seq"]
         codes = [_GATE_CODES[g] for g in gate_seq]
 
         packed = []
-        for i in range(0, len(codes), 4):
+        for i in range(0, len(codes), 8):
             word = 0
-            for j in range(min(4, len(codes) - i)):
-                word |= (codes[i + j] & 0xFF) << (j * 8)
+            for j in range(min(8, len(codes) - i)):
+                word |= (codes[i + j] & 0xF) << (j * 4)
             packed.append(word)
         return np.array(packed, dtype=np.int32)
 
@@ -191,11 +191,11 @@ class RBAsmProgram(BaseProgram):
         # gate_idx 從 0 遞增到 N-1，close_loop() 負責遞增與跳回。
         self.open_loop(len(cfg["gate_seq"]), name="gate_idx")
 
-        # ── 解碼：gate_code = (word_reg >> shift_reg) & 0xFF ────────────
+        # ── 解碼：gate_code = (word_reg >> shift_reg) & 0xF ─────────────
         # 三條指令；loop 內只能用 delay() 不能用 delay_auto()，但算術指令無此限制。
         self.write_reg("gate_code", "word_reg")
         self.append_macro(_RegOp(dst="gate_code", src="shift_reg", op="ASR"))
-        self.append_macro(_RegOp(dst="gate_code", src=0xFF,        op="AND"))
+        self.append_macro(_RegOp(dst="gate_code", src=0xF,         op="AND"))
 
         # ── 線性分派鏈（switch-case 等效）────────────────────────────────
         self.cond_jump("GATE_I",   "gate_code", "Z")                   # code 0
@@ -243,8 +243,8 @@ class RBAsmProgram(BaseProgram):
 
         # ── POST_GATE：更新 bit-unpack counters，然後 close_loop ─────────
         self.label("POST_GATE")
-        # shift_reg 每 gate 加 8；滿 32（即處理完 4 個 gate）時換下一個 word
-        self.inc_reg("shift_reg", 8)
+        # shift_reg 每 gate 加 4；滿 32（即處理完 8 個 gate）時換下一個 word
+        self.inc_reg("shift_reg", 4)
         self.cond_jump("NO_WORD_ADVANCE", "shift_reg", "NZ", op="-", arg2=32)
         self.write_reg("shift_reg", 0)
         self.inc_reg("word_addr", 1)

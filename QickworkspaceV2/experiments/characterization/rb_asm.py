@@ -14,15 +14,15 @@ Architecture
 
 ``rb_asm.py`` (ASMv2 DMEM dispatch, this file)::
 
-    compile_datamem()  →  pack 4 gate codes per int32 dmem word
+    compile_datamem()  →  pack 8 gate codes per int32 dmem word (4 bits each)
     _body():
         write_reg / init word_reg, shift_reg, word_addr
         open_loop(N, "gate_idx")
-            gate_code = (word_reg ASR shift_reg) AND 0xFF   ← 3 REG_WR
+            gate_code = (word_reg ASR shift_reg) AND 0xF    ← 3 REG_WR
             cond_jump GATE_I if code == 0
             cond_jump GATE_X if code == 1  ...              ← O(1) dispatch table
         POST_GATE:
-            shift_reg += 8 ; reload word every 4th gate
+            shift_reg += 4 ; reload word every 8th gate
         close_loop()
 
 Memory comparison
@@ -31,14 +31,14 @@ Memory comparison
 | metric           | rb.py (unroll)  | rb_asm.py (DMEM) |
 +==================+=================+==================+
 | pmem             | O(N_gates)      | ~120 words fixed |
-| dmem             | —               | ceil(N/4) words  |
+| dmem             | —               | ceil(N/8) words  |
 | max gates (pmem) | ~480            | unlimited*       |
-| max gates (dmem) | —               | 16 384           |
-| max depth (RB)   | ~160 Clifford   | ~8 738 Clifford  |
-| max depth (IRB)  | ~105 Clifford   | ~5 700 Clifford  |
+| max gates (dmem) | —               | 32 768           |
+| max depth (RB)   | ~160 Clifford   | ~17 476 Clifford |
+| max depth (IRB)  | ~105 Clifford   | ~11 398 Clifford |
 +------------------+-----------------+------------------+
 
-\\* pmem is fixed; dmem ceiling is 4096 words × 4 codes = 16 384 gates.
+\\* pmem is fixed; dmem ceiling is 4096 words × 8 codes = 32 768 gates.
 
 Notes
 -----
@@ -123,9 +123,9 @@ _INTERLEAVED_FILE_SUFFIX: dict[str, str] = {
 class RBAsmProgram(BaseProgram):
     """QICK program: ASMv2 DMEM dispatch loop for RB.
 
-    Gate codes are packed 4-per-word in dmem; each iteration decodes
-    one code via ``ASR`` + ``AND`` and dispatches with ``cond_jump``.
-    pmem footprint is ~120 words regardless of circuit depth.
+    Gate codes are packed 8-per-word in dmem (4 bits each); each
+    iteration decodes one code via ``ASR`` + ``AND 0xF`` and dispatches
+    with ``cond_jump``.  pmem footprint is ~120 words regardless of depth.
     """
 
     def _initialize(self, cfg):
@@ -144,33 +144,34 @@ class RBAsmProgram(BaseProgram):
             self.apply_cool(cfg)
 
         # gate_idx is allocated automatically by open_loop()
-        self.add_reg("gate_code")  # unpacked 8-bit gate code from current word
-        self.add_reg("word_reg")   # cached packed dmem word (4 codes × 8 bits)
-        self.add_reg("shift_reg")  # bit offset within word_reg: 0 / 8 / 16 / 24
+        self.add_reg("gate_code")  # unpacked 4-bit gate code from current word
+        self.add_reg("word_reg")   # cached packed dmem word (8 codes × 4 bits)
+        self.add_reg("shift_reg")  # bit offset within word_reg: 0/4/8/.../28
         self.add_reg("word_addr")  # current dmem word index
 
     def compile_datamem(self):
-        """Pack the gate sequence into dmem (4 codes per int32 word).
+        """Pack the gate sequence into dmem (8 codes per int32 word).
 
         Bit layout of each 32-bit word::
 
-            bits  7: 0  → gate code for position 4k+0
-            bits 15: 8  → gate code for position 4k+1
-            bits 23:16  → gate code for position 4k+2
-            bits 31:24  → gate code for position 4k+3
+            bits  3: 0  → gate code for position 8k+0
+            bits  7: 4  → gate code for position 8k+1
+            bits 11: 8  → gate code for position 8k+2
+            ...
+            bits 31:28  → gate code for position 8k+7
 
         Returns
         -------
         packed : numpy.ndarray of int32
-            Length ``ceil(len(gate_seq) / 4)``.  Fits in 4096-word
-            dmem for sequences up to 16 384 gate codes.
+            Length ``ceil(len(gate_seq) / 8)``.  Fits in 4096-word
+            dmem for sequences up to 32 768 gate codes.
         """
         codes = [_GATE_CODES[g] for g in self.cfg["gate_seq"]]
         packed = []
-        for i in range(0, len(codes), 4):
+        for i in range(0, len(codes), 8):
             word = 0
-            for j in range(min(4, len(codes) - i)):
-                word |= (codes[i + j] & 0xFF) << (j * 8)
+            for j in range(min(8, len(codes) - i)):
+                word |= (codes[i + j] & 0xF) << (j * 4)
             packed.append(word)
         return np.array(packed, dtype=np.int32)
 
@@ -200,10 +201,10 @@ class RBAsmProgram(BaseProgram):
         # ── hardware loop ────────────────────────────────────────────────
         self.open_loop(len(cfg["gate_seq"]), name="gate_idx")
 
-        # decode: gate_code = (word_reg >> shift_reg) & 0xFF
+        # decode: gate_code = (word_reg >> shift_reg) & 0xF
         self.write_reg("gate_code", "word_reg")
         self.append_macro(_RegOp(dst="gate_code", src="shift_reg", op="ASR"))
-        self.append_macro(_RegOp(dst="gate_code", src=0xFF,        op="AND"))
+        self.append_macro(_RegOp(dst="gate_code", src=0xF,         op="AND"))
 
         # dispatch
         self.cond_jump("GATE_I",   "gate_code", "Z")
@@ -251,7 +252,7 @@ class RBAsmProgram(BaseProgram):
 
         # ── advance unpack counters ──────────────────────────────────────
         self.label("POST_GATE")
-        self.inc_reg("shift_reg", 8)
+        self.inc_reg("shift_reg", 4)
         self.cond_jump("NO_WORD_ADVANCE", "shift_reg", "NZ", op="-", arg2=32)
         self.write_reg("shift_reg", 0)
         self.inc_reg("word_addr", 1)

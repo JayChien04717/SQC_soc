@@ -61,7 +61,8 @@ for gate in cfg["gate_seq"]:
 Python 端 (compile time)             硬體端 (run time)
 ─────────────────────────            ────────────────────────────
 compile_datamem()                    dmem[0..M-1] = packed words
-  pack 4 codes per int32 word
+  pack 8 codes per int32 word
+  (4 bits each, positions 0/4/8/.../28)
 
 _body():
   write_reg  shift_reg ← 0
@@ -72,14 +73,14 @@ _body():
     ; decode
     write_reg gate_code ← word_reg
     REG_WR    gate_code  ASR shift_reg   gate_code >>= shift_reg
-    REG_WR    gate_code  AND #255        gate_code &= 0xFF
+    REG_WR    gate_code  AND #15         gate_code &= 0xF
     ; dispatch
     cond_jump GATE_I   if code == 0
     cond_jump GATE_X   if code == 1
     ...
   POST_GATE:
-    inc_reg  shift_reg + 8
-    if shift_reg == 32:              every 4th gate: reload word
+    inc_reg  shift_reg + 4
+    if shift_reg == 32:              every 8th gate: reload word
         shift_reg = 0
         word_addr += 1
         word_reg = dmem[word_addr]
@@ -89,10 +90,14 @@ _body():
 ### dmem 打包格式
 
 ```
-int32 word = (code[4k] & 0xFF)
-           | (code[4k+1] & 0xFF) << 8
-           | (code[4k+2] & 0xFF) << 16
-           | (code[4k+3] & 0xFF) << 24
+int32 word = (code[8k]   & 0xF)
+           | (code[8k+1] & 0xF) << 4
+           | (code[8k+2] & 0xF) << 8
+           | (code[8k+3] & 0xF) << 12
+           | (code[8k+4] & 0xF) << 16
+           | (code[8k+5] & 0xF) << 20
+           | (code[8k+6] & 0xF) << 24
+           | (code[8k+7] & 0xF) << 28
 ```
 
 gate code 對照：`I=0, X=1, Y=2, X/2=3, -X/2=4, Y/2=5, -Y/2=6`
@@ -132,10 +137,10 @@ self.append_macro(_RegOp(dst="gate_code", src=0xFF,        op="AND"))
 | | pmem (4096 word) | dmem (4096 word) |
 |---|---|---|
 | `rb.py` | 超過 > ~160 Clifford | 未使用 |
-| `rb_asm.py` | 固定 ~120 words | ceil(N_gates / 4)，上限 16 384 gates |
+| `rb_asm.py` | 固定 ~120 words | ceil(N_gates / 8)，上限 32 768 gates |
 
-dmem 上限 16 384 gates ÷ 平均 1.875 gates/Clifford ≈ **8 738 Clifford（RB）**  
-dmem 上限 16 384 gates ÷ 平均 2.875 gates/Clifford ≈ **5 700 Clifford（IRB）**
+dmem 上限 32 768 gates ÷ 平均 1.875 gates/Clifford ≈ **~17 476 Clifford（RB）**  
+dmem 上限 32 768 gates ÷ 平均 2.875 gates/Clifford ≈ **~11 398 Clifford（IRB）**
 
 ---
 
