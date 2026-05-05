@@ -116,19 +116,19 @@ class RBAsmProgram(BaseProgram):
 
         Returns
         -------
-        codes : ndarray of int64
+        codes : ndarray of int32
             dmem initialisation array.
         """
         gate_seq = self.cfg["gate_seq"]
         codes = [_GATE_CODES[g] for g in gate_seq]
-        return np.array(codes, dtype=np.int64)
+        return np.array(codes, dtype=np.int32)
 
     def _body(self, cfg):
         """Implement the ASMv2 gate-dispatch loop and final measurement."""
         pfx = cfg.get("prefix", "ge")
 
         # 使用 delay(slot) 而非 delay_auto()，原因見模組 docstring。
-        gate_len = cfg[f"sigma_{pfx}"] * 5   # µs
+        gate_len = float(cfg[f"sigma_{pfx}"]) * 5   # µs；float() 防止 QickParam 傳入
         gap      = 0.01                       # µs
         slot     = gate_len + gap
 
@@ -191,7 +191,7 @@ class RBAsmProgram(BaseProgram):
         self.label("POST_GATE")
         self.close_loop()
 
-        self.delay(0.05)
+        self.delay_auto(0.05)
         self.measure(cfg)
 
 
