@@ -136,6 +136,37 @@ class BaseExperiment:
         self._sweep_vals_x = None
         self._sweep_vals_y = None
         self._yoko_mode = None
+        self._last_prog = None
+
+    def prog_asm(self, use_last: bool = False):
+        """
+        Build and print the QICK program for this experiment.
+
+        Useful in notebooks before acquisition:
+
+            prog = expt.prog_asm()
+
+        Parameters
+        ----------
+        use_last : bool, default False
+            When True, print the most recently built program if available.
+
+        Returns
+        -------
+        object
+            The program object that was printed.
+        """
+        if use_last and self._last_prog is not None:
+            prog = self._last_prog
+        elif getattr(self.soc, "is_simulated", False):
+            from ..backend.simulated_backend import _MockProgram
+            prog = _MockProgram(self.cfg, self.EXPT_NAME)
+        else:
+            prog = self._create_program()
+
+        self._last_prog = prog
+        print(prog)
+        return prog
 
     # ══════════════════════════════════════════════════════════════════════════
     # Unified entry point
@@ -176,6 +207,7 @@ class BaseExperiment:
             prog = _MockProgram(self.cfg, self.EXPT_NAME)
         else:
             prog = self._create_program()
+        self._last_prog = prog
         self._sweep_vals_x = BaseExperiment._resolve_axis(
             self._extract_sweep_axis(prog), self.cfg.get("steps")
         )
