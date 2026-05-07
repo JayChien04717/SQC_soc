@@ -1,8 +1,7 @@
 import numpy as np
-import matplotlib.pyplot as plt
 
 from scipy.special import comb
-from utils import complex_fit
+from .utils import complex_fit
 
 def fit_rational_fraction_pole_basis(x, y, n, poles = None, den = None):
     if den is None:
@@ -161,6 +160,7 @@ def reflection_purcell(freq, f_a_0, f_b_0, kappa_a, kappa_b, g):
     return num / den
 
 if __name__ == "__main__":
+    import matplotlib.pyplot as plt
 
     noise = 0.1
     n = 2

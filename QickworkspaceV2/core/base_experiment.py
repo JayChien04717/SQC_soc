@@ -35,7 +35,6 @@ from __future__ import annotations
 from typing import Optional, Type
 
 import numpy as np
-import matplotlib.pyplot as plt
 
 from .experiment_data import ExperimentData, QualityFlag
 from .base_analysis import BaseAnalysis

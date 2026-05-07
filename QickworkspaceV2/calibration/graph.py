@@ -117,15 +117,20 @@ class CalibrationGraph:
         """
         order = self._topological_order()
         ran: list[str] = []
+        dirty_params: set[str] = set()
         for name in order:
             node = self._nodes[name]
-            if self._node_is_stale(node, max_age_hours):
+            dependency_dirty = any(req in dirty_params for req in node.requires)
+            if self._node_is_stale(node, max_age_hours) or dependency_dirty:
                 if dry_run:
-                    print(f"[dry-run] would run: {name}")
+                    reason = "dependency changed" if dependency_dirty else "stale output"
+                    print(f"[dry-run] would run: {name} ({reason})")
                 else:
-                    print(f"[CalibrationGraph] running: {name}")
+                    reason = "dependency changed" if dependency_dirty else "stale output"
+                    print(f"[CalibrationGraph] running: {name} ({reason})")
                     node.run_fn()
                 ran.append(name)
+                dirty_params.update(node.provides)
         return ran
 
     def run_all(self, dry_run: bool = False) -> list[str]:

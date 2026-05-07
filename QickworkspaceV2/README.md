@@ -44,7 +44,7 @@ TWPA 準備完畢
 **操作：**
 
 ```python
-from qick_workspace.scrip.s002d_TWPA_flux import TWPAFlux
+from QickworkspaceV2.experiments.resonator import TWPAFlux
 
 # pump 關閉，yoko 從 -1 mA 掃到 +1 mA
 ref = TWPAFlux(run_cfg)
@@ -103,8 +103,8 @@ Rb = flux_bias_voltage / ifbl  # 單位 Ω
 **操作：**
 
 ```python
-from qick_workspace.scrip.s002e_TWPA_gain import TWPAGain
-from qick_workspace.tools.mg3692 import AnritsuMG3692
+from QickworkspaceV2.experiments.resonator import TWPAGain
+from QickworkspaceV2.instruments.mg3692 import AnritsuMG3692
 
 pump = AnritsuMG3692("192.168.10.182")
 
@@ -190,7 +190,7 @@ gain_scan.saveNetCDF(reference=ref)
 
 ```python
 import xarray as xr
-from qick_workspace.tools.scoring import (
+from QickworkspaceV2.tools.scoring import (
     score_ai_twpa_c_gain_data,
     find_best_operation_point,
     plot_gain_at_operation_point,
@@ -281,7 +281,7 @@ TWPA 準備完畢
 **操作：**
 
 ```python
-from qick_workspace.scrip.s002d_TWPA_flux import TWPAFlux
+from QickworkspaceV2.experiments.resonator import TWPAFlux
 
 # pump 關閉，yoko 從 -1 mA 掃到 +1 mA
 ref = TWPAFlux(run_cfg)
@@ -340,8 +340,8 @@ Rb = flux_bias_voltage / ifbl  # 單位 Ω
 **操作：**
 
 ```python
-from qick_workspace.scrip.s002e_TWPA_gain import TWPAGain
-from qick_workspace.tools.mg3692 import AnritsuMG3692
+from QickworkspaceV2.experiments.resonator import TWPAGain
+from QickworkspaceV2.instruments.mg3692 import AnritsuMG3692
 
 pump = AnritsuMG3692("192.168.10.182")
 
@@ -427,7 +427,7 @@ gain_scan.saveNetCDF(reference=ref)
 
 ```python
 import xarray as xr
-from qick_workspace.tools.scoring import (
+from QickworkspaceV2.tools.scoring import (
     score_ai_twpa_c_gain_data,
     find_best_operation_point,
     plot_gain_at_operation_point,
@@ -509,7 +509,7 @@ TWPA 準備完畢
 **操作：**
 
 ```python
-from qick_workspace.scrip.s002d_TWPA_flux import TWPAFlux
+from QickworkspaceV2.experiments.resonator import TWPAFlux
 
 # pump 關閉，yoko 從 -1 mA 掃到 +1 mA
 ref = TWPAFlux(run_cfg)
@@ -568,8 +568,8 @@ Rb = flux_bias_voltage / ifbl  # 單位 Ω
 **操作：**
 
 ```python
-from qick_workspace.scrip.s002e_TWPA_gain import TWPAGain
-from qick_workspace.tools.mg3692 import AnritsuMG3692
+from QickworkspaceV2.experiments.resonator import TWPAGain
+from QickworkspaceV2.instruments.mg3692 import AnritsuMG3692
 
 pump = AnritsuMG3692("192.168.10.182")
 
@@ -655,7 +655,7 @@ gain_scan.saveNetCDF(reference=ref)
 
 ```python
 import xarray as xr
-from qick_workspace.tools.scoring import (
+from QickworkspaceV2.tools.scoring import (
     score_ai_twpa_c_gain_data,
     find_best_operation_point,
     plot_gain_at_operation_point,
@@ -737,7 +737,7 @@ TWPA 準備完畢
 **操作：**
 
 ```python
-from qick_workspace.scrip.s002d_TWPA_flux import TWPAFlux
+from QickworkspaceV2.experiments.resonator import TWPAFlux
 
 # pump 關閉，yoko 從 -1 mA 掃到 +1 mA
 ref = TWPAFlux(run_cfg)
@@ -796,8 +796,8 @@ Rb = flux_bias_voltage / ifbl  # 單位 Ω
 **操作：**
 
 ```python
-from qick_workspace.scrip.s002e_TWPA_gain import TWPAGain
-from qick_workspace.tools.mg3692 import AnritsuMG3692
+from QickworkspaceV2.experiments.resonator import TWPAGain
+from QickworkspaceV2.instruments.mg3692 import AnritsuMG3692
 
 pump = AnritsuMG3692("192.168.10.182")
 
@@ -883,7 +883,7 @@ gain_scan.saveNetCDF(reference=ref)
 
 ```python
 import xarray as xr
-from qick_workspace.tools.scoring import (
+from QickworkspaceV2.tools.scoring import (
     score_ai_twpa_c_gain_data,
     find_best_operation_point,
     plot_gain_at_operation_point,
@@ -981,7 +981,7 @@ TWPA 準備完畢
 **操作：**
 
 ```python
-from qick_workspace.scrip.s002d_TWPA_flux import TWPAFlux
+from QickworkspaceV2.experiments.resonator import TWPAFlux
 
 # pump 關閉，yoko 從 -1 mA 掃到 +1 mA
 ref = TWPAFlux(run_cfg)
@@ -1040,8 +1040,8 @@ Rb = flux_bias_voltage / ifbl  # 單位 Ω
 **操作：**
 
 ```python
-from qick_workspace.scrip.s002e_TWPA_gain import TWPAGain
-from qick_workspace.tools.mg3692 import AnritsuMG3692
+from QickworkspaceV2.experiments.resonator import TWPAGain
+from QickworkspaceV2.instruments.mg3692 import AnritsuMG3692
 
 pump = AnritsuMG3692("192.168.10.182")
 
@@ -1127,7 +1127,7 @@ gain_scan.saveNetCDF(reference=ref)
 
 ```python
 import xarray as xr
-from qick_workspace.tools.scoring import (
+from QickworkspaceV2.tools.scoring import (
     score_ai_twpa_c_gain_data,
     find_best_operation_point,
     plot_gain_at_operation_point,
@@ -1446,7 +1446,7 @@ TWPA 準備完畢
 **操作：**
 
 ```python
-from qick_workspace.scrip.s002d_TWPA_flux import TWPAFlux
+from QickworkspaceV2.experiments.resonator import TWPAFlux
 
 # pump 關閉，yoko 從 -1 mA 掃到 +1 mA
 ref = TWPAFlux(run_cfg)
@@ -1505,8 +1505,8 @@ Rb = flux_bias_voltage / ifbl  # 單位 Ω
 **操作：**
 
 ```python
-from qick_workspace.scrip.s002e_TWPA_gain import TWPAGain
-from qick_workspace.tools.mg3692 import AnritsuMG3692
+from QickworkspaceV2.experiments.resonator import TWPAGain
+from QickworkspaceV2.instruments.mg3692 import AnritsuMG3692
 
 pump = AnritsuMG3692("192.168.10.182")
 
@@ -1592,7 +1592,7 @@ gain_scan.saveNetCDF(reference=ref)
 
 ```python
 import xarray as xr
-from qick_workspace.tools.scoring import (
+from QickworkspaceV2.tools.scoring import (
     score_ai_twpa_c_gain_data,
     find_best_operation_point,
     plot_gain_at_operation_point,
@@ -1646,3 +1646,4 @@ ref_data = xr.open_dataset("TWPA_gain_xxx_reference.nc")
 3. **統一回傳型別** — 所有實驗回傳 `ExperimentData`，包含原始 IQ、擬合結果、品質旗標、config 快照
 4. **硬體抽象** — 同一份實驗程式碼可在 `QICKBackend`（真實硬體）與 `SimulatedBackend`（離線）執行
 5. **持久化校正** — `CalibrationStore` 以時間戳 JSON 記錄每次校正結果，支援過期偵測與跨 session 重載
+

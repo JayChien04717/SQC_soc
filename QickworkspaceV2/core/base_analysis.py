@@ -56,6 +56,8 @@ class BaseAnalysis(ABC):
             return data
 
         self._run(data)
+        if data.quality.value == "bad":
+            return data
         data.quality = self._assess_quality(data)
         return data
 
@@ -116,16 +118,22 @@ class BaseAnalysis(ABC):
         if not self.thresholds:
             return QualityFlag.NO_INFORMATION
 
+        checked = False
         for param, bounds in self.thresholds.items():
             val = data.fit_result.get(param)
             if val is None:
                 continue
+            checked = True
             v = val[0] if isinstance(val, (tuple, list)) else val
             lo = bounds.get("min")
             hi = bounds.get("max")
             if (lo is not None and v < lo) or (hi is not None and v > hi):
                 data.quality_message = f"{param}={v:.4g} out of [{lo}, {hi}]"
                 return QualityFlag.BAD
+
+        if not checked:
+            data.quality_message = "No threshold parameters found in fit_result"
+            return QualityFlag.NO_INFORMATION
 
         return QualityFlag.GOOD
 

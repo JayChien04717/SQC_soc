@@ -42,15 +42,48 @@ from .backend.base_backend import BaseBackend
 from .backend.qick_backend import QICKBackend
 from .backend.simulated_backend import SimulatedBackend
 from .calibration import CalibrationStore, CalibrationGraph, CalibrationNode, CalibrationMonitor, AutoCalibrate
-from .config.system_cfg import ExperimentConfig
 
-# experiments
-from .experiments.setup import SingleShot_gef, SingleShot_ge_opt, hist, TOF
-from .experiments.resonator import ResonatorSpec, Punchout, ResonatorSpecFlux
-from .experiments.qubit_ge import QubitSpec, QubitSpecFlux, TimeRabi, PowerRabi, PowerRabiReset
-from .experiments.coherence import Ramsey, ACStark, SpinEcho, T1, RamseyEf, T1Ef
-from .experiments.qubit_ef import ResonatorSpec_ef, QubitSpecEf, PowerRabiEf, QubitTemp
-from .experiments.characterization import AllXY, RandomizedBenchmarking, AutoRB, Tomography
+_LAZY_EXPORTS = {
+    "ExperimentConfig": ".config.system_cfg",
+    "SingleShot_gef": ".experiments.setup",
+    "SingleShot_ge_opt": ".experiments.setup",
+    "hist": ".experiments.setup",
+    "TOF": ".experiments.setup",
+    "ResonatorSpec": ".experiments.resonator",
+    "Punchout": ".experiments.resonator",
+    "ResonatorSpecFlux": ".experiments.resonator",
+    "QubitSpec": ".experiments.qubit_ge",
+    "QubitSpecFlux": ".experiments.qubit_ge",
+    "TimeRabi": ".experiments.qubit_ge",
+    "PowerRabi": ".experiments.qubit_ge",
+    "PowerRabiReset": ".experiments.qubit_ge",
+    "Ramsey": ".experiments.coherence",
+    "ACStark": ".experiments.coherence",
+    "SpinEcho": ".experiments.coherence",
+    "T1": ".experiments.coherence",
+    "RamseyEf": ".experiments.coherence",
+    "T1Ef": ".experiments.coherence",
+    "ResonatorSpec_ef": ".experiments.qubit_ef",
+    "QubitSpecEf": ".experiments.qubit_ef",
+    "PowerRabiEf": ".experiments.qubit_ef",
+    "QubitTemp": ".experiments.qubit_ef",
+    "AllXY": ".experiments.characterization",
+    "RandomizedBenchmarking": ".experiments.characterization",
+    "AutoRB": ".experiments.characterization",
+    "Tomography": ".experiments.characterization",
+}
+
+
+def __getattr__(name):
+    module_name = _LAZY_EXPORTS.get(name)
+    if module_name is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    from importlib import import_module
+
+    module = import_module(module_name, __name__)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
 
 __version__ = "1.0.0"
 

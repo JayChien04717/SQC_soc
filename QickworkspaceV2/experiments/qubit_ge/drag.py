@@ -10,12 +10,13 @@ from scipy.optimize import curve_fit
 
 from ...core.base_program import BaseProgram
 from ...core.base_experiment import BaseExperiment
+from ...core.experiment_data import ExperimentData, QualityFlag
 from ...tools.system_tool import hdf5_generator, get_next_filename_labber, config_to_yaml
 from ...plotter.liveplot import liveplotfun
 
 
 class DragProgram(BaseProgram):
-    """QICK program for DRAG calibration: sweeps alpha via two-for-loop 2D scan."""
+    """QICK program for DRAG calibration using an ASMv2 hardware iteration loop."""
 
     def _initialize(self, cfg):
         self.setup_resonator(cfg)
@@ -30,12 +31,18 @@ class DragProgram(BaseProgram):
         if cfg.get("cooling", False):
             self.apply_cool(cfg)
             self.cooling_body(cfg)
-        iterations = int(cfg.get("iter", 10))
-        for _ in range(iterations):
-            self.pulse(ch=cfg["qb_ch"], name="x180_ge", t=0)
-            self.delay_auto(0.01)
-            self.pulse(ch=cfg["qb_ch"], name="mx180_ge", t=0)
-            self.delay_auto(0.01)
+
+        # ASMv2 hardware loop. open_loop() allocates and initializes the
+        # tProc counter; close_loop() increments it and jumps back as needed.
+        self.open_loop(int(cfg["iteration"]), name="iter_loop")
+
+        self.pulse(ch=cfg["qb_ch"], name="x180_ge", t=0)
+        self.delay_auto(t=0.01)
+        self.pulse(ch=cfg["qb_ch"], name="mx180_ge", t=0)
+        self.delay_auto(t=0.01)
+
+        self.close_loop()
+        self.delay_auto(t=0.05, tag="waiting")
         self.measure(cfg)
 
 
@@ -63,13 +70,13 @@ class DragCalibration(BaseExperiment):
         if "alpha_start" not in cfg or "alpha_stop" not in cfg or "alpha_steps" not in cfg:
             raise ValueError("cfg must contain 'alpha_start', 'alpha_stop', 'alpha_steps'.")
         alphas = np.linspace(cfg["alpha_start"], cfg["alpha_stop"], cfg["alpha_steps"])
-        if "iter_start" in cfg and "iter_stop" in cfg:
+        if "iteration_start" in cfg and "iteration_stop" in cfg:
             iters = np.arange(
-                cfg["iter_start"], cfg["iter_stop"] + 1,
-                cfg.get("iter_step", 1), dtype=float,
+                cfg["iteration_start"], cfg["iteration_stop"] + 1,
+                cfg.get("iteration_step", 1), dtype=float,
             )
         else:
-            iters = np.array([float(cfg.get("iter", 10))])
+            iters = np.array([float(cfg["iteration"])])
         return alphas, iters
 
     def run(self, py_avg, show_final_plot=False, **kwargs):
@@ -79,7 +86,7 @@ class DragCalibration(BaseExperiment):
 
         def _make_prog(alpha_val, iter_val):
             self.cfg["drag_alpha"] = float(alpha_val)
-            self.cfg["iter"] = int(iter_val)
+            self.cfg["iteration"] = int(iter_val)
             return DragProgram(
                 self.soccfg,
                 reps=self.cfg["reps"],
@@ -101,15 +108,46 @@ class DragCalibration(BaseExperiment):
 
         if self.iqdata is None:
             print("No data acquired.")
-            return None
+            result = ExperimentData(
+                experiment_type=self.EXPT_NAME,
+                quality=QualityFlag.BAD,
+                quality_message="No data acquired",
+                interrupted=True,
+                avg_count=0,
+            )
+            self.result = result
+            return result
         if interrupted:
             print(f"Interrupted at avg {avg_count}.")
 
-        return self._post_fit(alphas)
+        fit_result = self._post_fit(alphas) or {}
+        optimal_alpha = fit_result.get("optimal_alpha")
+        result = ExperimentData(
+            experiment_type=self.EXPT_NAME,
+            raw_iq=self.iqdata,
+            x_axis=alphas,
+            y_axis=iters,
+            fit_params=self.fit_params,
+            fit_errors=self.fit_errors,
+            fit_result={k: (v, None) for k, v in fit_result.items()},
+            scalar_result=float(optimal_alpha) if optimal_alpha is not None else None,
+            quality=QualityFlag.NO_INFORMATION,
+            config=dict(self.cfg) if hasattr(self.cfg, "__iter__") else {},
+            interrupted=interrupted,
+            avg_count=avg_count,
+            x_name=self.X_SAVE_NAME,
+            x_unit=self.X_SAVE_UNIT,
+            x_scale=self.X_SAVE_SCALE,
+            y_name=self.Y_SAVE_NAME,
+            y_unit=self.Y_SAVE_UNIT,
+            y_scale=self.Y_SAVE_SCALE,
+        )
+        self.result = result
+        return result
 
     def _create_program(self):
         self.cfg.setdefault("drag_alpha", self.cfg.get("alpha_start", 0.5))
-        self.cfg.setdefault("iter", self.cfg.get("iter_start", 1))
+        self.cfg.setdefault("iteration", self.cfg.get("iteration_start", 1))
         return DragProgram(
             self.soccfg,
             reps=self.cfg["reps"],
@@ -192,12 +230,19 @@ class DragCalibration(BaseExperiment):
         fig.tight_layout()
         plt.show()
 
-        self.fit_params = {"optimal_alpha": round(float(optimal_alpha), 6)}
-        return self.fit_params
+        optimal_alpha = round(float(optimal_alpha), 6)
+        self.fit_params = np.array([optimal_alpha])
+        self.fit_errors = None
+        self._drag_fit_result = {"optimal_alpha": optimal_alpha}
+        return self._drag_fit_result
 
     def _save_comment(self, dict_val):
-        if self.fit_params:
-            a = self.fit_params.get("optimal_alpha", "N/A")
+        fit_result = getattr(self, "_drag_fit_result", None)
+        if fit_result:
+            a = fit_result.get("optimal_alpha", "N/A")
+            return f"DRAG Calibration\nOptimal alpha = {a}\n{dict_val}"
+        if self.result is not None:
+            a = self.result.get_param("optimal_alpha", "N/A")
             return f"DRAG Calibration\nOptimal alpha = {a}\n{dict_val}"
         return f"{dict_val}"
 
