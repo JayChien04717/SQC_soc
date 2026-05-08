@@ -12,9 +12,9 @@ Usage
     # Declarative calibration pipeline — each step runs sequentially,
     # passing updated config forward.
     cal = BatchExperiment([
-        ResonatorSpec(cfg, backend=backend),
-        QubitSpec(cfg, backend=backend),
-        PowerRabi(cfg, backend=backend),
+        ResonatorSpec(cfg),
+        QubitSpec(cfg),
+        PowerRabi(cfg),
     ])
     results = cal.run(py_avg=10)
     print(results["ResonatorSpec"].quality)

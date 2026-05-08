@@ -62,8 +62,8 @@ class TOF(BaseExperiment):
     X_SAVE_UNIT = "s"
     X_SAVE_SCALE = 1e-6
 
-    def __init__(self, config, backend=None):
-        super().__init__(config, backend)
+    def __init__(self, config):
+        super().__init__(config)
         self.iq_list = None
         self.t = None
 

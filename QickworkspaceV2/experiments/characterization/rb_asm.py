@@ -267,7 +267,7 @@ class RBAsmProgram(BaseProgram):
 
 # ── Experiment ───────────────────────────────────────────────────────────────
 
-class RandomizedBenchmarkingAsm:
+class RandomizedBenchmarkingAsm(BaseExperiment):
     """Single-qubit RB using ASMv2 DMEM dispatch (constant pmem).
 
     Functionally identical to ``RandomizedBenchmarking`` but uses
@@ -279,15 +279,10 @@ class RandomizedBenchmarkingAsm:
     ----------
     config : dict
         Experiment configuration dictionary.
-    backend : object, optional
-        Backend providing ``soc`` and ``soccfg``.  Falls back to
-        ``BaseExperiment`` class-level state when ``None``.
-
     Raises
     ------
     RuntimeError
-        If no backend is supplied and ``BaseExperiment.setup()`` has
-        not been called.
+        If ``BaseExperiment.connect_pyro4()`` has not been called.
 
     Examples
     --------
@@ -300,17 +295,8 @@ class RandomizedBenchmarkingAsm:
     EXPT_NAME = "s015_RB_asm"
     Analysis   = RBAnalysis
 
-    def __init__(self, config, backend=None):
-        if backend is not None:
-            self.soc    = backend.soc
-            self.soccfg = backend.soccfg
-        else:
-            if BaseExperiment._soc is None:
-                raise RuntimeError(
-                    "Call BaseExperiment.setup(soc, soccfg, data_path) first."
-                )
-            self.soc    = BaseExperiment._soc
-            self.soccfg = BaseExperiment._soccfg
+    def __init__(self, config):
+        super().__init__(config)
         self.cfg          = config
         self.x            = None
         self.rb_result    = None
@@ -587,9 +573,6 @@ class AutoRBAsm:
     ----------
     config : dict
         Experiment configuration dictionary.
-    backend : object, optional
-        Backend providing ``soc`` and ``soccfg``.
-
     Examples
     --------
     >>> auto = AutoRBAsm(cfg)
@@ -600,9 +583,8 @@ class AutoRBAsm:
     >>> print(auto.summary())
     """
 
-    def __init__(self, config, backend=None):
+    def __init__(self, config):
         self.cfg           = config
-        self.backend       = backend
         self._rb_kwargs: dict = {}
         self.results: dict    = {}
         self._rb_objects: dict = {}
@@ -650,7 +632,7 @@ class AutoRBAsm:
         gates_to_run = [None] + (interleaved_gates or [])
         for gate in tqdm(gates_to_run, desc="AutoRBAsm"):
             label = "ref" if gate is None else gate
-            rb = RandomizedBenchmarkingAsm(self.cfg, backend=self.backend)
+            rb = RandomizedBenchmarkingAsm(self.cfg)
             rb.run(py_avg, interleaved_gate=gate, **self._rb_kwargs)
             self._rb_objects[label] = rb
 

@@ -5,9 +5,8 @@ Key differences from qick_workspace BaseExperiment
 ----------------------------------------------------
 * ``run()`` returns :class:`~core.experiment_data.ExperimentData` instead of
   raw fit tuples.
-* Accepts an optional ``backend`` argument for dependency injection
-  (:class:`~backend.base_backend.BaseBackend` subclass).  Falls back to the
-  legacy ``setup(soc, soccfg, data_path)`` class method.
+* Uses a shared QICK session initialised by ``connect_pyro4()`` or
+  ``setup(soc, soccfg, data_path)``.
 * Each subclass may declare an ``Analysis`` class attribute (a
   :class:`~core.base_analysis.BaseAnalysis` subclass) that is run
   automatically after ``_post_fit``.
@@ -44,13 +43,18 @@ class BaseExperiment:
     """
     Base class for all experiment wrappers.
 
-    Session initialisation (legacy, call once per notebook)::
+    Session initialisation (call once per notebook)::
+
+        soc, soccfg = BaseExperiment.connect_pyro4(
+            ns_host="192.168.10.82",
+            ns_port=8888,
+            proxy_name="myqick",
+            data_path=r"D:\\Labber_Data\\Jay\\test",
+        )
+
+    Or, if you already created the QICK proxy yourself::
 
         BaseExperiment.setup(soc, soccfg, data_path)
-
-    Or inject a Backend::
-
-        expt = MyExperiment(cfg, backend=QICKBackend(soc, soccfg))
 
     Subclass contract
     -----------------
@@ -67,6 +71,7 @@ class BaseExperiment:
     _soc = None
     _soccfg = None
     _data_path = None
+    _session_name = None
 
     @classmethod
     def setup(cls, soc, soccfg, data_path: str):
@@ -74,6 +79,39 @@ class BaseExperiment:
         cls._soc = soc
         cls._soccfg = soccfg
         cls._data_path = data_path
+
+    @classmethod
+    def connect_pyro4(
+        cls,
+        ns_host: str,
+        ns_port: int = 8888,
+        proxy_name: str = "myqick",
+        data_path: str = "",
+    ):
+        """Connect to QICK through Pyro4 and activate it for all experiments."""
+        try:
+            import Pyro4
+            from qick.pyro import make_proxy
+        except ImportError as exc:
+            raise ImportError(
+                "Pyro4 and qick must be installed to connect to QICK hardware."
+            ) from exc
+
+        Pyro4.config.SERIALIZER = "pickle"
+        Pyro4.config.PICKLE_PROTOCOL_VERSION = 4
+
+        soc, soccfg = make_proxy(
+            ns_host=ns_host,
+            ns_port=ns_port,
+            proxy_name=proxy_name,
+        )
+        cls.setup(soc, soccfg, data_path)
+        cls._session_name = f"QICK@{ns_host}:{ns_port}/{proxy_name}"
+        print(
+            f"[BaseExperiment] Session activated: {cls._session_name}, "
+            f"data_path={data_path!r}"
+        )
+        return soc, soccfg
 
     @classmethod
     def set_data_path(cls, data_path: str):
@@ -105,28 +143,21 @@ class BaseExperiment:
     Analysis: Optional[Type[BaseAnalysis]] = None
 
     # ────────────────────────────────────────────────────────────────────────
-    def __init__(self, config, backend=None):
+    def __init__(self, config):
         """
         Parameters
         ----------
         config : dict or ExperimentConfig
             Experiment configuration.
-        backend : BaseBackend, optional
-            Hardware backend.  When ``None``, falls back to the legacy
-            class-level ``_soc`` / ``_soccfg`` set via ``setup()``.
         """
-        if backend is not None:
-            self.soc = backend.soc
-            self.soccfg = backend.soccfg
-        else:
-            if BaseExperiment._soc is None:
-                raise RuntimeError(
-                    "QICK session not initialised. "
-                    "Call BaseExperiment.setup(soc, soccfg, data_path) "
-                    "or pass backend=QICKBackend(soc, soccfg)."
-                )
-            self.soc = BaseExperiment._soc
-            self.soccfg = BaseExperiment._soccfg
+        if BaseExperiment._soc is None:
+            raise RuntimeError(
+                "QICK session not initialised. "
+                "Call BaseExperiment.connect_pyro4(...) or "
+                "BaseExperiment.setup(soc, soccfg, data_path)."
+            )
+        self.soc = BaseExperiment._soc
+        self.soccfg = BaseExperiment._soccfg
 
         self.cfg = config
         self.iqdata = None

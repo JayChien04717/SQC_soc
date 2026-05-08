@@ -1,7 +1,7 @@
 # QickworkspaceV2 Tutorial Notebooks
 
-These notebooks assume a live QICK backend. Before running hardware cells,
-edit the `QICKBackend.from_pyro4(...)` host and data path for your lab setup.
+These notebooks assume a live QICK session. Before running hardware cells,
+edit the `BaseExperiment.connect_pyro4(...)` host and data path for your lab setup.
 
 ## Sequence
 
@@ -18,11 +18,10 @@ edit the `QICKBackend.from_pyro4(...)` host and data path for your lab setup.
 
 ## Backend
 
-Use the real hardware backend:
+Use the real hardware session:
 
 ```python
-from QickworkspaceV2.backend.qick_backend import QICKBackend
+from QickworkspaceV2 import BaseExperiment
 
-backend = QICKBackend.from_pyro4("192.168.10.82")
-backend.activate()
+BaseExperiment.connect_pyro4("192.168.10.82")
 ```

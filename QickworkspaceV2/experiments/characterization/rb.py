@@ -64,22 +64,14 @@ class RBProgram(BaseProgram):
         self.measure(cfg)
 
 
-class RandomizedBenchmarking:
+class RandomizedBenchmarking(BaseExperiment):
     """Single-qubit RB (s015): standard and interleaved."""
 
     EXPT_NAME = "s015_RB"
     Analysis = RBAnalysis
 
-    def __init__(self, config, backend=None):
-        if backend is not None:
-            self.soc = backend.soc
-            self.soccfg = backend.soccfg
-        else:
-            if BaseExperiment._soc is None:
-                raise RuntimeError("Call BaseExperiment.setup(soc, soccfg, data_path) first.")
-            self.soc = BaseExperiment._soc
-            self.soccfg = BaseExperiment._soccfg
-        self.cfg = config
+    def __init__(self, config):
+        super().__init__(config)
         self.x = None
         self.rb_result = None
         self._number_sample = None
@@ -230,9 +222,8 @@ def _gate_fidelity_err(p_ref, p_irb, var_p_ref, var_p_irb, d=2):
 class AutoRB:
     """Automated Standard + Interleaved RB in one call (s015)."""
 
-    def __init__(self, config, backend=None):
+    def __init__(self, config):
         self.cfg = config
-        self.backend = backend
         self._rb_kwargs: dict = {}
         self.results: dict = {}
         self._rb_objects: dict = {}
@@ -257,7 +248,7 @@ class AutoRB:
         gates_to_run = [None] + (interleaved_gates or [])
         for gate in tqdm(gates_to_run, desc="AutoRB"):
             label = "ref" if gate is None else gate
-            rb = RandomizedBenchmarking(self.cfg, backend=self.backend)
+            rb = RandomizedBenchmarking(self.cfg)
             rb.run(py_avg, interleaved_gate=gate, **self._rb_kwargs)
             self._rb_objects[label] = rb
 

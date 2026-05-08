@@ -4,14 +4,12 @@ QickworkspaceV2 — IBM/IQM-style automated quantum calibration framework.
 Quick start
 -----------
     from .core.base_experiment import BaseExperiment
-    from .backend.qick_backend import QICKBackend
     from .config.system_cfg import ExperimentConfig
     from .calibration import CalibrationStore, AutoCalibrate
     from .experiments import ResonatorSpec, QubitSpec, T1
 
     # --- Hardware setup ---
-    backend = QICKBackend.from_pyro4("192.168.1.100", 8888)
-    backend.activate()                     # sets BaseExperiment._soc/_soccfg
+    BaseExperiment.connect_pyro4("192.168.1.100", ns_port=8888)
 
     # --- Config ---
     from .config.system_cfg import ExperimentConfig
@@ -19,7 +17,7 @@ Quick start
 
     # --- Single experiment ---
     cfg = cfg_all.get_qubit("Q1")
-    result = ResonatorSpec(cfg, backend=backend).run(py_avg=5)
+    result = ResonatorSpec(cfg).run(py_avg=5)
     print(result.fit_result)
 
     # --- Automated calibration ---
@@ -30,7 +28,7 @@ Quick start
 
     # --- REST service ---
     from .service import create_app
-    app = create_app(cal_store=store, config_all=cfg_all, backend=backend)
+    app = create_app(cal_store=store, config_all=cfg_all)
     # uvicorn .service.api:app --host 0.0.0.0 --port 8000
 """
 
@@ -38,8 +36,6 @@ from .core.experiment_data import ExperimentData, QualityFlag
 from .core.base_analysis import BaseAnalysis
 from .core.base_experiment import BaseExperiment
 from .core.composite import BatchExperiment, ParallelExperiment
-from .backend.base_backend import BaseBackend
-from .backend.qick_backend import QICKBackend
 from .calibration import CalibrationStore, CalibrationGraph, CalibrationNode, CalibrationMonitor, AutoCalibrate
 
 _LAZY_EXPORTS = {
@@ -91,8 +87,6 @@ __all__ = [
     "ExperimentData", "QualityFlag",
     "BaseAnalysis", "BaseExperiment",
     "BatchExperiment", "ParallelExperiment",
-    # backend
-    "BaseBackend", "QICKBackend",
     # calibration
     "CalibrationStore", "CalibrationGraph", "CalibrationNode",
     "CalibrationMonitor", "AutoCalibrate",

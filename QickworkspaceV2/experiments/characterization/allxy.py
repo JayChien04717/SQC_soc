@@ -64,22 +64,14 @@ class AllXYProgram(BaseProgram):
         self.measure(cfg)
 
 
-class AllXY:
+class AllXY(BaseExperiment):
     """AllXY gate error diagnostic (s014): 21 gate-pair sequences."""
 
     EXPT_NAME = "s014_AllXY_ge"
     Analysis = AllXYAnalysis
 
-    def __init__(self, config, backend=None):
-        if backend is not None:
-            self.soc = backend.soc
-            self.soccfg = backend.soccfg
-        else:
-            if BaseExperiment._soc is None:
-                raise RuntimeError("Call BaseExperiment.setup(soc, soccfg, data_path) first.")
-            self.soc = BaseExperiment._soc
-            self.soccfg = BaseExperiment._soccfg
-        self.cfg = config
+    def __init__(self, config):
+        super().__init__(config)
         self.allxy_lst: np.ndarray | None = None
         self._iq_process = "abs"
 

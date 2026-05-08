@@ -50,21 +50,13 @@ class StateTomographyProgram(BaseProgram):
         self.measure(cfg)
 
 
-class Tomography:
+class Tomography(BaseExperiment):
     """Single-qubit state tomography (s016): X/Y/Z axes with MLE reconstruction."""
 
     EXPT_NAME = "s016_Tomography_ge"
 
-    def __init__(self, config, backend=None):
-        if backend is not None:
-            self.soc = backend.soc
-            self.soccfg = backend.soccfg
-        else:
-            if BaseExperiment._soc is None:
-                raise RuntimeError("Call BaseExperiment.setup(soc, soccfg, data_path) first.")
-            self.soc = BaseExperiment._soc
-            self.soccfg = BaseExperiment._soccfg
-        self.cfg = config
+    def __init__(self, config):
+        super().__init__(config)
         self.iq_g = None
         self.iq_e = None
         self.tomo_data_raw: dict = {}

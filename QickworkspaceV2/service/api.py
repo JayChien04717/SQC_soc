@@ -65,7 +65,7 @@ def _set_job(job_id: str, **kwargs):
 
 # ── App factory ───────────────────────────────────────────────────────────────
 
-def create_app(cal_store=None, config_all=None, backend=None) -> "FastAPI":
+def create_app(cal_store=None, config_all=None) -> "FastAPI":
     """
     Create the FastAPI application.
 
@@ -75,8 +75,6 @@ def create_app(cal_store=None, config_all=None, backend=None) -> "FastAPI":
         If provided, calibration endpoints will use this store.
     config_all : ExperimentConfig or None
         Required for /calibrate endpoints.
-    backend : BaseBackend or None
-        Hardware backend; injected into experiments when not None.
     """
     if not _FASTAPI_AVAILABLE:
         raise ImportError("fastapi and pydantic are required: pip install fastapi uvicorn pydantic")
@@ -135,7 +133,7 @@ def create_app(cal_store=None, config_all=None, backend=None) -> "FastAPI":
         _set_job(job_id, status="running", started_at=datetime.now().isoformat())
         try:
             cls = _resolve_experiment(exp_type)
-            expt = cls(cfg, backend=backend)
+            expt = cls(cfg)
             result = expt.run(py_avg, **kwargs)
             from ..data.serializer import experiment_to_json
             _set_job(job_id, status="done", result=experiment_to_json(result),

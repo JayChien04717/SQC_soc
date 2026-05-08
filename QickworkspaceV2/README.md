@@ -1164,7 +1164,6 @@ ref_data = xr.open_dataset("TWPA_gain_xxx_reference.nc")
 | Yokogawa flux bias | `YOKOGS200` |
 /
 ├── core/               ← 實驗執行核心抽象層
-├── backend/            ← 硬體介面抽象層
 ├── config/             ← 硬體通道與頻率設定
 ├── experiments/        ← 所有實驗類別
 │   ├── setup/          ← 初始設定實驗
@@ -1209,18 +1208,19 @@ class MyExperiment(BaseExperiment):
 
 ---
 
-### `backend/` — 硬體介面抽象層
+### QICK session — 硬體連線
 
-將實驗程式碼與實際 QICK 硬體連線解耦，集中由後端物件管理 soc / soccfg。
-
-| 檔案 | 說明 |
-| --- | --- |
-| `base_backend.py` | 抽象介面，定義 `activate()`、`run_program()` |
-| `qick_backend.py` | 真實硬體後端，透過 Pyro4 連接 QICK 板 |
+硬體連線集中在 `BaseExperiment`，notebook 開頭呼叫一次即可：
 
 ```python
-backend = QICKBackend.from_pyro4("192.168.10.82", 8888)
-backend.activate()   # 設定全域 soc / soccfg
+from QickworkspaceV2 import BaseExperiment
+
+soc, soccfg = BaseExperiment.connect_pyro4(
+    ns_host="192.168.10.82",
+    ns_port=8888,
+    proxy_name="myqick",
+    data_path=r"D:\Labber_Data\Jay\test",
+)
 ```
 
 ---
@@ -1638,6 +1638,6 @@ ref_data = xr.open_dataset("TWPA_gain_xxx_reference.nc")
 1. **完全獨立** — 不依賴 `qick_workspace`，所有工具為內部複本，可單獨安裝使用
 2. **向下相容** — `result = expt.run(py_avg)` 支援舊式 `fit_params, err = result` tuple 解包與 `float(result)` scalar 轉型
 3. **統一回傳型別** — 所有實驗回傳 `ExperimentData`，包含原始 IQ、擬合結果、品質旗標、config 快照
-4. **硬體抽象** — 由 `QICKBackend` 統一管理真實硬體連線與 session 啟用
+4. **硬體 session 單一入口** — 由 `BaseExperiment.connect_pyro4()` 初始化真實 QICK 連線
 5. **持久化校正** — `CalibrationStore` 以時間戳 JSON 記錄每次校正結果，支援過期偵測與跨 session 重載
 
