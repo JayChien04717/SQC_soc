@@ -1211,21 +1211,15 @@ class MyExperiment(BaseExperiment):
 
 ### `backend/` — 硬體介面抽象層
 
-將實驗程式碼與實際 QICK 硬體解耦，同一份實驗可在真實硬體或模擬環境執行。
+將實驗程式碼與實際 QICK 硬體連線解耦，集中由後端物件管理 soc / soccfg。
 
 | 檔案 | 說明 |
 | --- | --- |
 | `base_backend.py` | 抽象介面，定義 `activate()`、`run_program()` |
 | `qick_backend.py` | 真實硬體後端，透過 Pyro4 連接 QICK 板 |
-| `simulated_backend.py` | 軟體模擬後端，不需硬體即可產生合成 IQ 資料（Lorentzian、指數衰減、Rabi 振盪等） |
 
 ```python
-# 真實硬體
 backend = QICKBackend.from_pyro4("192.168.10.82", 8888)
-
-# 離線開發 / 測試
-backend = SimulatedBackend(noise_level=0.02)
-
 backend.activate()   # 設定全域 soc / soccfg
 ```
 
@@ -1644,6 +1638,6 @@ ref_data = xr.open_dataset("TWPA_gain_xxx_reference.nc")
 1. **完全獨立** — 不依賴 `qick_workspace`，所有工具為內部複本，可單獨安裝使用
 2. **向下相容** — `result = expt.run(py_avg)` 支援舊式 `fit_params, err = result` tuple 解包與 `float(result)` scalar 轉型
 3. **統一回傳型別** — 所有實驗回傳 `ExperimentData`，包含原始 IQ、擬合結果、品質旗標、config 快照
-4. **硬體抽象** — 同一份實驗程式碼可在 `QICKBackend`（真實硬體）與 `SimulatedBackend`（離線）執行
+4. **硬體抽象** — 由 `QICKBackend` 統一管理真實硬體連線與 session 啟用
 5. **持久化校正** — `CalibrationStore` 以時間戳 JSON 記錄每次校正結果，支援過期偵測與跨 session 重載
 

@@ -2,7 +2,7 @@
 BaseBackend — abstract hardware abstraction layer.
 
 Decouples experiment logic from QICK-specific objects (soc / soccfg).
-Concrete implementations: QICKBackend (real hardware), SimulatedBackend (mock).
+Concrete implementation: QICKBackend (real hardware).
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ class BaseBackend(ABC):
     Attributes
     ----------
     soc : object
-        Hardware SoC proxy (QICK ``QickSoc`` or mock).
+        Hardware SoC proxy (QICK ``QickSoc``).
     soccfg : object
-        Hardware configuration (QICK ``QickConfig`` or mock).
+        Hardware configuration (QICK ``QickConfig``).
     name : str
         Human-readable backend name (e.g. ``"QICK@192.168.1.1"``).
     """
@@ -49,10 +49,5 @@ class BaseBackend(ABC):
         """
         ...
 
-    def is_simulated(self) -> bool:
-        """Return ``True`` if this is a simulated (mock) backend."""
-        return False
-
     def __repr__(self) -> str:
-        sim = " [simulated]" if self.is_simulated() else ""
-        return f"{self.__class__.__name__}({self.name!r}{sim})"
+        return f"{self.__class__.__name__}({self.name!r})"

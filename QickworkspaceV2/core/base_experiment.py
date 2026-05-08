@@ -36,8 +36,8 @@ from typing import Optional, Type
 
 import numpy as np
 
-from .experiment_data import ExperimentData, QualityFlag
 from .base_analysis import BaseAnalysis
+from .experiment_data import ExperimentData, QualityFlag
 
 
 class BaseExperiment:
@@ -158,9 +158,6 @@ class BaseExperiment:
         """
         if use_last and self._last_prog is not None:
             prog = self._last_prog
-        elif getattr(self.soc, "is_simulated", False):
-            from ..backend.simulated_backend import _MockProgram
-            prog = _MockProgram(self.cfg, self.EXPT_NAME)
         else:
             prog = self._create_program()
 
@@ -202,12 +199,13 @@ class BaseExperiment:
             self._cfg_snap = dict(self.cfg)
         except Exception:
             self._cfg_snap = None
-        if getattr(self.soc, "is_simulated", False):
-            from ..backend.simulated_backend import _MockProgram
-            prog = _MockProgram(self.cfg, self.EXPT_NAME)
-        else:
-            prog = self._create_program()
+        prog = self._create_program()
         self._last_prog = prog
+
+        threshold = self._get_readout_threshold()
+        if threshold is not None:
+            return self._run_threshold_acquire(prog, threshold, py_avg=py_avg)
+
         self._sweep_vals_x = BaseExperiment._resolve_axis(
             self._extract_sweep_axis(prog), self.cfg.get("steps")
         )
@@ -308,12 +306,12 @@ class BaseExperiment:
 
     def saveLabber(self, qb_idx, yoko_value=None, config_all=None, title=None):
         """Legacy Labber-format HDF5 save (unchanged from original)."""
+        from ..config.system_cfg import DATA_PATH
         from ..tools.system_tool import (
+            config_to_yaml,
             get_next_filename_labber,
             hdf5_generator,
-            config_to_yaml,
         )
-        from ..config.system_cfg import DATA_PATH
 
         if title is not None:
             expt_name = f"{self.EXPT_NAME}_{qb_idx}_{title}"
@@ -378,7 +376,7 @@ class BaseExperiment:
             return vals.astype(float)
 
         # QickParam: try every known array-extraction method
-        for method in ('to_array', 'sweep_vals', 'get_array'):
+        for method in ("to_array", "sweep_vals", "get_array"):
             fn = getattr(vals, method, None)
             if callable(fn):
                 try:
@@ -387,12 +385,12 @@ class BaseExperiment:
                     pass
 
         # QickParam with is_sweep(): extract from start/stop/step/expts/steps
-        if hasattr(vals, 'is_sweep') and callable(vals.is_sweep) and vals.is_sweep():
-            start = getattr(vals, 'start', None)
-            stop  = getattr(vals, 'stop',  None)
-            step  = getattr(vals, 'step',  None)
+        if hasattr(vals, "is_sweep") and callable(vals.is_sweep) and vals.is_sweep():
+            start = getattr(vals, "start", None)
+            stop = getattr(vals, "stop", None)
+            step = getattr(vals, "step", None)
             # 'expts' or 'steps' for count
-            n_raw = getattr(vals, 'expts', None) or getattr(vals, 'steps', None)
+            n_raw = getattr(vals, "expts", None) or getattr(vals, "steps", None)
             n = int(n_raw) if n_raw is not None else (int(steps) if steps else 100)
             if start is not None and stop is not None:
                 try:
@@ -406,8 +404,8 @@ class BaseExperiment:
                     pass
 
         # QickSweep1D-like (start + stop present, no is_sweep)
-        start = getattr(vals, 'start', None)
-        stop  = getattr(vals, 'stop',  None)
+        start = getattr(vals, "start", None)
+        stop = getattr(vals, "stop", None)
         if start is not None and stop is not None:
             n = int(steps) if steps is not None else 100
             try:
@@ -430,7 +428,7 @@ class BaseExperiment:
             obj_arr = np.asarray(vals)
             resolved = []
             for v in obj_arr.flat:
-                for method in ('to_array', 'sweep_vals'):
+                for method in ("to_array", "sweep_vals"):
                     fn = getattr(v, method, None)
                     if callable(fn):
                         try:
@@ -439,10 +437,12 @@ class BaseExperiment:
                         except Exception:
                             pass
                 else:
-                    s = getattr(v, 'start', None)
-                    e = getattr(v, 'stop',  None)
+                    s = getattr(v, "start", None)
+                    e = getattr(v, "stop", None)
                     if s is not None and e is not None and steps:
-                        resolved.extend(np.linspace(float(s), float(e), int(steps)).tolist())
+                        resolved.extend(
+                            np.linspace(float(s), float(e), int(steps)).tolist()
+                        )
                     elif s is not None:
                         try:
                             resolved.append(float(s))
@@ -459,6 +459,81 @@ class BaseExperiment:
             pass
 
         raise ValueError(f"Cannot resolve sweep axis from {type(vals).__name__}")
+
+    def _get_readout_threshold(self):
+        """Return configured readout threshold, or None when disabled."""
+        if not hasattr(self.cfg, "get"):
+            return None
+        return self.cfg.get("threshold")
+
+    def _run_threshold_acquire(
+        self, prog, threshold=None, py_avg: int = 1
+    ) -> ExperimentData:
+        """
+        Acquire with QICK's threshold discriminator and skip live plotting.
+
+        QICK returns already-discriminated I/population values when threshold
+        is supplied, so the result stores the returned I channel directly.
+        """
+        self._sweep_vals_x = BaseExperiment._resolve_axis(
+            self._extract_sweep_axis(prog), self.cfg.get("steps")
+        )
+        self._sweep_vals_y = BaseExperiment._resolve_axis(
+            self._extract_sweep_axis_y(prog), self.cfg.get("steps")
+        )
+
+        try:
+            acquired = prog.acquire(
+                self.soc,
+                rounds=py_avg,
+                threshold=threshold,
+                progress=True,
+            )
+        except TypeError:
+            acquired = prog.acquire(
+                self.soc,
+                threshold=threshold,
+                progress=True,
+            )
+
+        try:
+            i_values = acquired[0][0].dot([1, 1j]).real
+        except (AttributeError, IndexError, TypeError, ValueError):
+            i_values = np.asarray(acquired, dtype=float).squeeze()
+        self.iqdata = i_values
+
+        scalar = None
+        if np.size(i_values) == 1:
+            scalar = float(np.asarray(i_values).reshape(-1)[0])
+
+        fit_result = {"population": (i_values, None)}
+        result = ExperimentData(
+            experiment_type=self.EXPT_NAME,
+            raw_iq=i_values,
+            x_axis=self._sweep_vals_x,
+            y_axis=self._sweep_vals_y,
+            fit_params=np.array([scalar]) if scalar is not None else None,
+            fit_errors=None,
+            fit_result=fit_result,
+            scalar_result=scalar,
+            quality=QualityFlag.NO_INFORMATION,
+            quality_message="Threshold discrimination used; live plot skipped.",
+            config=dict(self.cfg) if hasattr(self.cfg, "__iter__") else {},
+            metadata={
+                "threshold": threshold,
+                "threshold_discrimination": True,
+            },
+            interrupted=False,
+            avg_count=py_avg,
+            x_name=self.X_SAVE_NAME,
+            x_unit=self.X_SAVE_UNIT,
+            x_scale=self.X_SAVE_SCALE,
+            y_name=self.Y_SAVE_NAME,
+            y_unit=self.Y_SAVE_UNIT,
+            y_scale=self.Y_SAVE_SCALE,
+        )
+        self.result = result
+        return result
 
     # ══════════════════════════════════════════════════════════════════════════
     # Subclass MUST override

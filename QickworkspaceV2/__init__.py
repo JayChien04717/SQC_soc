@@ -40,7 +40,6 @@ from .core.base_experiment import BaseExperiment
 from .core.composite import BatchExperiment, ParallelExperiment
 from .backend.base_backend import BaseBackend
 from .backend.qick_backend import QICKBackend
-from .backend.simulated_backend import SimulatedBackend
 from .calibration import CalibrationStore, CalibrationGraph, CalibrationNode, CalibrationMonitor, AutoCalibrate
 
 _LAZY_EXPORTS = {
@@ -93,7 +92,7 @@ __all__ = [
     "BaseAnalysis", "BaseExperiment",
     "BatchExperiment", "ParallelExperiment",
     # backend
-    "BaseBackend", "QICKBackend", "SimulatedBackend",
+    "BaseBackend", "QICKBackend",
     # calibration
     "CalibrationStore", "CalibrationGraph", "CalibrationNode",
     "CalibrationMonitor", "AutoCalibrate",
