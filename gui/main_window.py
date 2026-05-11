@@ -562,6 +562,7 @@ class AcquireWorker(QThread):
             result = expt.run(py_avg)
         if isinstance(result, dict):
             result = self._dict_to_experiment_data(expt, result, py_avg)
+        self._ensure_plottable_result(result)
         result.interrupted = result.interrupted or self._stop_requested
         if result.raw_iq is not None and result.x_axis is not None:
             self.data_ready.emit(
@@ -614,6 +615,30 @@ class AcquireWorker(QThread):
             y_name="State" if raw_iq is not None else "",
             y_unit="",
         )
+
+    @staticmethod
+    def _ensure_plottable_result(result):
+        """Backfill plot arrays for legacy ExperimentData returned by special runs."""
+        if result is None or getattr(result, "raw_iq", None) is not None:
+            return
+        if getattr(result, "y_axis", None) is not None:
+            y = np.asarray(result.y_axis)
+            if y.ndim == 1:
+                result.raw_iq = y
+                if getattr(result, "x_axis", None) is None:
+                    result.x_axis = np.arange(y.shape[0], dtype=float)
+                return
+        fit = getattr(result, "fit_result", {}) or {}
+        keys = ("expect_X", "expect_Y", "expect_Z")
+        if all(key in fit for key in keys):
+            vals = []
+            for key in keys:
+                raw = fit[key]
+                vals.append(raw[0] if isinstance(raw, (tuple, list)) and raw else raw)
+            result.raw_iq = np.asarray(vals, dtype=float)
+            result.x_axis = np.arange(3, dtype=float)
+            result.x_name = result.x_name or "Tomography axis"
+            result.y_name = result.y_name or "Expectation"
 
 
 class MainWindow(QMainWindow):

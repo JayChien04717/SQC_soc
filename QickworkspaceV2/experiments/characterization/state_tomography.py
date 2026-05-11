@@ -132,9 +132,17 @@ class Tomography(BaseExperiment):
         self.expect_values, self.rho_mle = self._reconstruct_density_matrix()
 
         purity = float(np.real(np.trace(self.rho_mle @ self.rho_mle)))
+        expectation_axis = np.array([0.0, 1.0, 2.0])
+        expectation_values = np.array([
+            self.expect_values["X"],
+            self.expect_values["Y"],
+            self.expect_values["Z"],
+        ], dtype=float)
         result = ExperimentData(
             experiment_type=self.EXPT_NAME,
-            x_axis=np.array([0.0, 1.0, 2.0]),
+            raw_iq=expectation_values,
+            x_axis=expectation_axis,
+            y_axis=self.rho_mle,
             fit_result={
                 "expect_X": self.expect_values["X"],
                 "expect_Y": self.expect_values["Y"],
@@ -142,6 +150,10 @@ class Tomography(BaseExperiment):
                 "purity": purity,
                 "prep_pulse": self.prep_pulse_name,
             },
+            x_name="Tomography axis",
+            x_unit="X/Y/Z",
+            y_name="Expectation",
+            y_unit="",
             quality=QualityFlag.GOOD if purity >= 0.8 else QualityFlag.WARNING,
         )
         self.result = result

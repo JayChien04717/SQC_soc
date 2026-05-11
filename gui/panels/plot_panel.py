@@ -252,6 +252,29 @@ class PlotPanel(QWidget):
             and arr.shape[0] <= arr.shape[1]
         )
 
+    @staticmethod
+    def _looks_like_tomography(iq, experiment_type=""):
+        arr = np.asarray(iq)
+        context = str(experiment_type or "").lower()
+        return "tomo" in context and arr.ndim == 1 and arr.shape[0] == 3
+
+    def _plot_tomography_expectations(self):
+        vals = np.asarray(self._iq, dtype=float)
+        self._reset_single_axis()
+        labels = ["<X>", "<Y>", "<Z>"]
+        colors = [ACCENT, "#f2cc60", "#ff7b72"]
+        self.ax.bar(np.arange(3), vals, color=colors, alpha=0.78, edgecolor=BG0, linewidth=0.8)
+        self.ax.axhline(0.0, color=BG3, linewidth=1.0)
+        self.ax.set_xticks(np.arange(3), labels)
+        self.ax.set_ylim(-1.05, 1.05)
+        self.ax.set_ylabel("Expectation")
+        self.ax.set_title(self._title or "State Tomography", fontsize=9)
+        for idx, val in enumerate(vals):
+            va = "bottom" if val >= 0 else "top"
+            offset = 0.04 if val >= 0 else -0.04
+            self.ax.text(idx, val + offset, f"{val:.3f}", ha="center", va=va, color=TEXT, fontsize=9)
+        self.canvas.draw_idle()
+
     def _plot_singleshot_histograms(self):
         iq = np.asarray(self._iq, dtype=np.complex128)
         n_states = iq.shape[0]
@@ -347,6 +370,9 @@ class PlotPanel(QWidget):
 
     def _replot(self):
         if self._x is None or self._iq is None:
+            return
+        if self._looks_like_tomography(self._iq, self._experiment_type or self._title):
+            self._plot_tomography_expectations()
             return
         if self._looks_like_singleshot_iq(self._iq, self._experiment_type or self._title):
             self._plot_singleshot_histograms()

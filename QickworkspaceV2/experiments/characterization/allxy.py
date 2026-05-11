@@ -92,8 +92,13 @@ class AllXY(BaseExperiment):
 
         result = ExperimentData(
             experiment_type=self.EXPT_NAME,
+            raw_iq=self.allxy_lst,
             x_axis=np.arange(len(ALLXY_SEQUENCE), dtype=float),
             y_axis=self.allxy_lst,
+            x_name="Gate pair",
+            x_unit="index",
+            y_name="Signal",
+            y_unit="ADC",
             quality=QualityFlag.NO_INFORMATION,
         )
         if self.Analysis is not None:
