@@ -10,12 +10,16 @@ from PySide6.QtCore import QProcess, QSettings, QThread, QTimer, Qt, Signal
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QDockWidget,
+    QHeaderView,
     QLabel,
     QMainWindow,
     QMessageBox,
     QProgressBar,
     QPushButton,
     QStatusBar,
+    QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
     QWidget,
@@ -179,25 +183,141 @@ def _build_run_cfg(class_path: str, qubit_cfg: dict, params: dict) -> dict:
 
 
 class ConfigViewer(QWidget):
-    """Floating config and fit-result viewer."""
+    """Config load summary plus full config/fit JSON."""
 
     update_requested = Signal()
+    config_changed = Signal(str, object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(6, 6, 6, 6)
+        self.summary = QLabel("Config not loaded")
+        self.summary.setWordWrap(True)
+        self.summary.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.summary.setStyleSheet("color: #c9d1d9; line-height: 140%;")
+
+        self.tabs = QTabWidget()
+        self.table = QTableWidget(0, 3)
+        self.table.setHorizontalHeaderLabels(["Key", "Value", "Type"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setAlternatingRowColors(True)
+        self.table.itemChanged.connect(self._on_item_changed)
+
         self.text = QTextEdit()
         self.text.setReadOnly(True)
         self.text.setMinimumWidth(360)
         self.text.setMinimumHeight(420)
+
+        self.tabs.addTab(self.table, "Editable Config")
+        self.tabs.addTab(self.text, "Raw JSON")
+
         self.update_btn = QPushButton("Update Config From Fit")
         self.update_btn.clicked.connect(self.update_requested)
-        layout.addWidget(self.text)
+        layout.addWidget(self.summary)
+        layout.addWidget(self.tabs)
         layout.addWidget(self.update_btn)
+        self._loading_table = False
 
     def set_payload(self, payload: dict):
+        fit_keys = list((payload.get("last_fit") or {}).keys())
+        summary_lines = [
+            f"Status: {payload.get('status', 'unknown')}",
+            f"Path: {payload.get('path') or '-'}",
+            f"Source: {payload.get('source') or '-'}",
+            f"Active qubit: {payload.get('active_qubit') or '-'}",
+            f"Qubits: {payload.get('qubit_count', 0)}",
+            f"Config keys: {payload.get('config_key_count', 0)}",
+            f"Overrides: {payload.get('override_count', 0)}",
+            f"Fit keys: {', '.join(fit_keys) if fit_keys else '-'}",
+        ]
+        if payload.get("error"):
+            summary_lines.insert(1, f"Error: {payload['error']}")
+        self.summary.setText("\n".join(summary_lines))
+        self._populate_table(payload.get("config") or {})
         self.text.setPlainText(json.dumps(payload, indent=2, default=str, ensure_ascii=False))
+
+    def _populate_table(self, config: dict):
+        self._loading_table = True
+        self.table.setRowCount(0)
+        for row, key in enumerate(sorted(config)):
+            value = config[key]
+            self.table.insertRow(row)
+            key_item = QTableWidgetItem(str(key))
+            key_item.setFlags(key_item.flags() & ~Qt.ItemIsEditable)
+            value_item = QTableWidgetItem(self._format_value(value))
+            value_item.setData(Qt.UserRole, value)
+            type_item = QTableWidgetItem(type(value).__name__)
+            type_item.setFlags(type_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(row, 0, key_item)
+            self.table.setItem(row, 1, value_item)
+            self.table.setItem(row, 2, type_item)
+        self._loading_table = False
+
+    def _on_item_changed(self, item: QTableWidgetItem):
+        if self._loading_table or item.column() != 1:
+            return
+        row = item.row()
+        key_item = self.table.item(row, 0)
+        if key_item is None:
+            return
+        key = key_item.text()
+        previous = item.data(Qt.UserRole)
+        try:
+            value = self._parse_value(item.text(), previous)
+        except ValueError as exc:
+            self._loading_table = True
+            item.setText(self._format_value(previous))
+            self._loading_table = False
+            QMessageBox.warning(self, "Invalid config value", str(exc))
+            return
+        item.setData(Qt.UserRole, value)
+        type_item = self.table.item(row, 2)
+        if type_item is not None:
+            type_item.setText(type(value).__name__)
+        self.config_changed.emit(key, value)
+
+    @staticmethod
+    def _format_value(value) -> str:
+        if isinstance(value, (dict, list, tuple)):
+            return json.dumps(value, default=str, ensure_ascii=False)
+        return str(value)
+
+    @staticmethod
+    def _parse_value(text: str, previous):
+        raw = text.strip()
+        if isinstance(previous, bool):
+            lowered = raw.lower()
+            if lowered in {"true", "1", "yes", "y", "on"}:
+                return True
+            if lowered in {"false", "0", "no", "n", "off"}:
+                return False
+            raise ValueError("Boolean values must be true/false.")
+        if isinstance(previous, int) and not isinstance(previous, bool):
+            try:
+                return int(raw)
+            except ValueError as exc:
+                raise ValueError("Integer values must be valid integers.") from exc
+        if isinstance(previous, float):
+            try:
+                return float(raw)
+            except ValueError as exc:
+                raise ValueError("Float values must be valid numbers.") from exc
+        if isinstance(previous, (dict, list, tuple)):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError as exc:
+                raise ValueError("List/dict values must be valid JSON.") from exc
+            return tuple(parsed) if isinstance(previous, tuple) else parsed
+        if raw.startswith(("{", "[")):
+            try:
+                return json.loads(raw)
+            except json.JSONDecodeError:
+                pass
+        return raw
 
 
 class AcquireWorker(QThread):
@@ -455,6 +575,9 @@ class MainWindow(QMainWindow):
         self._config_list: list = []
         self._config_all = None
         self._config_overrides: dict[str, dict] = {}
+        self._config_path = ""
+        self._config_source = ""
+        self._config_error = ""
         self._last_result = None
         self._last_result_path = None
         self._browser_procs: list[QProcess] = []
@@ -479,9 +602,7 @@ class MainWindow(QMainWindow):
         self._add_dock("Experiment", self.expt_panel, Qt.RightDockWidgetArea, closable=False, width=300)
 
         self.config_viewer = ConfigViewer()
-        self._config_dock = self._add_dock("Config", self.config_viewer, Qt.RightDockWidgetArea, width=380)
-        self._config_dock.setFloating(True)
-        self._config_dock.hide()
+        self._config_dock = self._add_dock("Config Info", self.config_viewer, Qt.RightDockWidgetArea, width=380)
 
         self._log = QTextEdit()
         self._log.setReadOnly(True)
@@ -559,6 +680,7 @@ class MainWindow(QMainWindow):
         self.setup_panel.qubit_changed.connect(self._on_qubit)
         self.setup_panel.config_loaded.connect(self._on_config)
         self.config_viewer.update_requested.connect(self._update_config_from_fit)
+        self.config_viewer.config_changed.connect(self._on_config_value_changed)
         self.expt_panel.run_requested.connect(self._on_run)
         self.expt_panel.stop_requested.connect(self._on_stop)
         self.expt_panel.save_requested.connect(self._on_save)
@@ -593,6 +715,10 @@ class MainWindow(QMainWindow):
         self._refresh_config_view()
 
     def _on_config(self, path: str):
+        self._config_path = str(path)
+        self._config_source = self._describe_config_source(path)
+        self._config_error = ""
+        self._refresh_config_view(status="loading")
         try:
             cfg, qubit_names, config_list = self._parse_config(path)
             if config_list:
@@ -601,7 +727,10 @@ class MainWindow(QMainWindow):
             else:
                 self._config_all = None
         except Exception as exc:
+            self._config_error = str(exc)
             self.log(f"Config load failed: {exc}", "error")
+            self._refresh_config_view(status="error")
+            self._show_config_viewer()
             return
         self._config = cfg
         self._config_list = config_list
@@ -612,7 +741,7 @@ class MainWindow(QMainWindow):
             self._lbl_qubit.setText(self.setup_panel.active_qubit_name)
         suffix = f" ({len(config_list)} qubits)" if config_list else f" ({len(cfg)} keys)"
         self.log(f"Config loaded: {path}{suffix}", "info")
-        self._refresh_config_view()
+        self._refresh_config_view(status="loaded")
 
     def _parse_config(self, path: str) -> tuple[dict, list, list]:
         p = Path(path)
@@ -667,6 +796,22 @@ class MainWindow(QMainWindow):
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
+
+    @staticmethod
+    def _describe_config_source(path: str) -> str:
+        p = Path(path)
+        if p.suffix == ".py":
+            try:
+                rel = p.resolve().relative_to(Path.cwd().resolve())
+                parts = rel.with_suffix("").parts
+                if parts and all(part.isidentifier() for part in parts):
+                    return ".".join(parts)
+            except ValueError:
+                pass
+            return "python file"
+        if p.suffix.lower() in {".yaml", ".yml"}:
+            return "yaml file"
+        return p.suffix.lstrip(".") or "file"
 
     def _auto_connect_mock(self):
         from gui.mock.hardware import MockSoc, MockSoccfg
@@ -748,11 +893,35 @@ class MainWindow(QMainWindow):
         self._config_dock.show()
         self._config_dock.raise_()
 
-    def _refresh_config_view(self):
+    def _refresh_config_view(self, status: str | None = None):
+        active_qubit = self.setup_panel.active_qubit_name if hasattr(self, "setup_panel") else ""
+        active_cfg = self._active_qubit_cfg() if hasattr(self, "setup_panel") else {}
+        overrides = self._config_overrides.get(active_qubit, {}) if active_qubit else {}
+        qubit_names = [
+            item.get("name", f"Q{i}")
+            for i, item in enumerate(self._config_list)
+            if isinstance(item, dict)
+        ]
+        load_status = status
+        if load_status is None:
+            if self._config_error:
+                load_status = "error"
+            elif self._config_list or self._config:
+                load_status = "loaded"
+            else:
+                load_status = "not loaded"
         payload = {
-            "active_qubit": self.setup_panel.active_qubit_name if hasattr(self, "setup_panel") else "",
-            "config": self._active_qubit_cfg() if hasattr(self, "setup_panel") else {},
-            "overrides": self._config_overrides.get(self.setup_panel.active_qubit_name, {}) if hasattr(self, "setup_panel") else {},
+            "status": load_status,
+            "path": self._config_path,
+            "source": self._config_source,
+            "error": self._config_error,
+            "active_qubit": active_qubit,
+            "qubit_count": len(qubit_names),
+            "qubit_names": qubit_names,
+            "config_key_count": len(active_cfg),
+            "override_count": len(overrides),
+            "config": active_cfg,
+            "overrides": overrides,
             "last_fit": getattr(self._last_result, "fit_result", {}) or {},
             "last_result": {
                 "experiment_type": getattr(self._last_result, "experiment_type", None),
@@ -781,6 +950,22 @@ class MainWindow(QMainWindow):
                 except Exception as exc:
                     self.log(f"Config update failed for {key}: {exc}", "warn")
         self.log(f"Updated {qubit}: {updates}", "success")
+        self._refresh_config_view()
+
+    def _on_config_value_changed(self, key: str, value):
+        qubit = self.setup_panel.active_qubit_name
+        if not qubit:
+            self.log(f"Config edit ignored; no active qubit for {key}.", "warn")
+            return
+        self._config_overrides.setdefault(qubit, {})[key] = value
+        if self._config_all is not None:
+            try:
+                self._config_all.update(key, value, q_index=qubit)
+            except Exception as exc:
+                self.log(f"Runtime config edit kept as override; source update failed for {key}: {exc}", "warn")
+        elif self._config:
+            self._config[key] = value
+        self.log(f"Config edited: {qubit}.{key} = {value}", "success")
         self._refresh_config_view()
 
     @staticmethod
