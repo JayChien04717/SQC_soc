@@ -53,7 +53,7 @@
 
 | 文件 | 說明 |
 | --- | --- |
-| [gui.md](gui.md) | QICK Qubit Measurement GUI 產品設計規劃（量測工程師 + PM 雙重視角） |
+| [gui.md](gui.md) | QICK GUI 產品設計、API productization roadmap，以及新增 experiment 到 GUI 的流程。 |
 
 ---
 

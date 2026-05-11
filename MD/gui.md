@@ -347,3 +347,182 @@ The GUI is "done" when a lab member can:
 5. Copy the current qubit parameters as YAML and paste them into a new config
 
 If all five work reliably, the app is production-ready for a superconducting qubit lab.
+
+---
+
+## Appendix A. Adding a New Experiment to the GUI
+
+The GUI works best when every experiment returns a clean `ExperimentData`. Add GUI-specific glue only when the experiment cannot follow the normal `BaseExperiment` liveplot flow.
+
+### 1. Make the experiment importable
+
+Place the experiment under `QickworkspaceV2/experiments/<family>/` and export it from that family's `__init__.py`.
+
+For a normal sweep experiment, prefer the standard `BaseExperiment` contract:
+
+```python
+class MyExperiment(BaseExperiment):
+    EXPT_NAME = "s017_MyExperiment_ge"
+    X_LABEL = "Frequency (MHz)"
+    TITLE_PREFIX = "My Experiment"
+
+    def _create_program(self):
+        return MyProgram(
+            self.soccfg,
+            reps=self.cfg["reps"],
+            final_delay=self.cfg["relax_delay"],
+            cfg=self.cfg,
+        )
+
+    def _extract_sweep_axis(self, prog):
+        return self.cfg["freq_pts"]
+```
+
+Special experiments can override `run()`, but should still return `ExperimentData`.
+
+### 2. Return plottable `ExperimentData`
+
+The GUI mainly needs:
+
+```python
+ExperimentData(
+    experiment_type=self.EXPT_NAME,
+    raw_iq=data,
+    x_axis=x_vals,
+    fit_result={...},
+    config=dict(self.cfg),
+)
+```
+
+Common result shapes:
+
+| Experiment type | `raw_iq` shape | GUI plot |
+| --- | --- | --- |
+| 1D sweep | `(N,)` | line/scatter plus fit line |
+| 2D sweep | `(Ny, Nx)` | pcolormesh |
+| SingleShot | `(states, shots)` complex | IQ 2D histogram plus rotated-I histogram |
+| AllXY | `(21,)` | gate-set x labels plus reference line |
+| Tomography | `(3,)`, with `y_axis=rho_mle` | 3D density-matrix bar |
+
+Do not store primary plot data only in `y_axis`; use `raw_iq` for the measured values. Use `y_axis` for a second sweep axis or extra structured data such as `rho_mle`.
+
+### 3. Register the experiment
+
+Edit `gui/panels/experiment_panel.py`.
+
+Add a display entry:
+
+```python
+EXPERIMENT_REGISTRY = {
+    "Qubit GE": [
+        ("My Experiment", "s017_my_experiment.MyExperiment"),
+    ],
+}
+```
+
+Add parameter metadata using the same class path:
+
+```python
+"s017_my_experiment.MyExperiment": [
+    ("py_avg", "int", 10, 1, 500, "Python-level averages"),
+    ("reps", "int", 100, 100, 50000, "Hardware reps per point"),
+    ("relax_delay", "float", 50.0, 0.1, 5000.0, "Relax delay (us)"),
+    ("steps", "int", 101, 2, 2000, "Sweep points"),
+]
+```
+
+Supported parameter kinds are `"int"`, `"float"`, `"bool"`, and `"combo"`.
+
+### 4. Choose liveplot or special run mode
+
+Normal `BaseExperiment` sweep experiments usually need no changes in `gui/main_window.py`; they use `_run_liveplot()`.
+
+If the experiment owns a blocking multi-step flow, add it to `AcquireWorker._SPECIAL_EXPTS` and handle any custom `run()` arguments in `_run_special()`:
+
+```python
+elif cp == "s017_my_experiment.MyExperiment":
+    result = expt.run(py_avg, my_option=self.params.get("my_option"))
+```
+
+Special runs usually update the plot only after completion unless the experiment provides its own streaming callback.
+
+### 5. Add a custom plot only when needed
+
+Most experiments should use the default `PlotPanel` behavior. Add a special renderer in `gui/panels/plot_panel.py` only for nonstandard plots such as AllXY gate labels, SingleShot histograms, or Tomography density matrices.
+
+Pattern:
+
+```python
+if self._looks_like_my_experiment(self._iq, self._experiment_type or self._title):
+    self._plot_my_experiment()
+    return
+```
+
+When drawing reference lines, do not store them in `_fit_line`; `_draw_fit()` clears `_fit_line` before drawing final fit summaries.
+
+### 6. Add mock data for GUI debug mode
+
+Edit `gui/mock/runner.py` so the GUI can test the new experiment without QICK hardware:
+
+```python
+elif "myexperiment" in cls:
+    x = np.linspace(-10, 10, 101)
+    avgi = np.exp(-(x / 3) ** 2) * 500
+    avgq = _noise(len(x), 10)
+    xlabel = "Detuning (MHz)"
+    title = "My Experiment"
+```
+
+### 7. Minimum checks
+
+Run:
+
+```bash
+python -m py_compile gui/main_window.py gui/panels/experiment_panel.py gui/panels/plot_panel.py
+python -m py_compile QickworkspaceV2/experiments/<family>/<name>.py
+```
+
+Manual checks:
+
+- Experiment appears in the category/experiment combo
+- Parameters have the right widget types and units
+- Run logs start and complete
+- Plot is not blank
+- Fit summary appears when available
+- Save result does not fail
+- Config update changes only intended fit keys
+
+---
+
+## Appendix B. API Productization Direction
+
+Long term, the GUI should become a thin client over a stable experiment service:
+
+```text
+GUI / Notebook / Web client
+    -> QickworkspaceV2 API service
+    -> Experiment job manager
+    -> BaseExperiment / QICK hardware
+    -> ExperimentData + CalibrationStore
+```
+
+Core service endpoints should cover:
+
+| Method | Endpoint | Purpose |
+| --- | --- | --- |
+| `GET` | `/health` | Service status |
+| `GET` | `/experiments/schema` | Experiment catalog and parameter metadata |
+| `POST` | `/experiments/run` | Submit experiment job |
+| `GET` | `/experiments/{job_id}/status` | Poll job status |
+| `GET` | `/experiments/{job_id}/result` | Fetch `ExperimentData` |
+| `POST` | `/experiments/{job_id}/stop` | Request graceful stop |
+| `GET` | `/experiments/{job_id}/stream` | Live data/log stream |
+
+Product rules:
+
+- The GUI should not own hardware lifecycle forever.
+- Every run should have a job id, config snapshot, status, result, and audit metadata.
+- Experiment metadata should become schema-driven instead of hardcoded separately in the UI.
+- Fit results should update config through preview/apply, not silent mutation.
+- Persistent calibration values should go through `CalibrationStore`.
+- Live data should stream from the service instead of being pulled from GUI-owned acquisition loops.

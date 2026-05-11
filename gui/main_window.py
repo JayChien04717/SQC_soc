@@ -542,6 +542,11 @@ class AcquireWorker(QThread):
         self.log_message.emit("This experiment uses a single blocking run; stop takes effect after the current call.", "warn")
         if cp == "s000_SingleShot_prog.SingleShot_gef":
             result = expt.run(py_avg, shot_f=self.params.get("shot_f", False))
+        elif cp == "s000_SingleShot_opt.SingleShot_ge_opt":
+            sweep_para = self._build_singleshot_opt_sweep(expt)
+            expt.run(py_avg, sweep_para=sweep_para, shot_f=self.params.get("shot_f", False))
+            length, gain, freq = expt.analyze(bo_n_iter=0, pareto=True)
+            result = self._singleshot_opt_result(expt, py_avg, length, gain, freq)
         elif cp in ("s015_Single_qubit_RB.RandomizedBenchmarking", "s015_RB_asm.RandomizedBenchmarkingAsm"):
             result = expt.run(
                 py_avg,
@@ -572,6 +577,63 @@ class AcquireWorker(QThread):
                 getattr(expt, "TITLE_PREFIX", result.experiment_type),
             )
         self.result_ready.emit(result)
+
+    @staticmethod
+    def _linspace_param(params: dict, start_key: str, stop_key: str, steps_key: str):
+        steps = max(1, int(params.get(steps_key, 1)))
+        start = float(params.get(start_key))
+        stop = float(params.get(stop_key))
+        return np.linspace(start, stop, steps)
+
+    def _build_singleshot_opt_sweep(self, expt):
+        freq_span = float(self.params.get("freq_span", 4.5))
+        freq_steps = max(1, int(self.params.get("freq_steps", 11)))
+        freq_center = float(self.params.get("freq_center", expt.cfg.get("res_freq_ge", 0.0)))
+        return {
+            "freq": np.linspace(freq_center - freq_span, freq_center + freq_span, freq_steps),
+            "gain": self._linspace_param(self.params, "gain_start", "gain_stop", "gain_steps"),
+            "length": self._linspace_param(self.params, "length_start", "length_stop", "length_steps"),
+        }
+
+    @staticmethod
+    def _singleshot_opt_result(expt, avg_count: int, length, gain, freq):
+        from QickworkspaceV2.core.experiment_data import ExperimentData
+
+        fid = np.asarray(getattr(expt, "fid_Array", []), dtype=float)
+        if fid.size and np.isfinite(fid).any():
+            best_idx = np.unravel_index(np.nanargmax(fid), fid.shape)
+        else:
+            best_idx = (0, 0, 0)
+        traces = [
+            np.asarray(expt.data["Ig"][best_idx]) + 1j * np.asarray(expt.data["Qg"][best_idx]),
+            np.asarray(expt.data["Ie"][best_idx]) + 1j * np.asarray(expt.data["Qe"][best_idx]),
+        ]
+        states = [0, 1]
+        if "If" in expt.data and "Qf" in expt.data:
+            traces.append(np.asarray(expt.data["If"][best_idx]) + 1j * np.asarray(expt.data["Qf"][best_idx]))
+            states.append(2)
+        raw_iq = np.vstack(traces)
+        fit_result = {
+            "best_length": (length, None),
+            "best_gain": (gain, None),
+            "best_freq": (freq, None),
+            "best_fidelity": (float(fid[best_idx]), None) if fid.size else (None, None),
+            "shots": (int(raw_iq.shape[-1]), None),
+        }
+        return ExperimentData(
+            experiment_type=getattr(expt, "EXPT_NAME", expt.__class__.__name__),
+            raw_iq=raw_iq,
+            x_axis=np.arange(raw_iq.shape[-1], dtype=float),
+            y_axis=np.asarray(states, dtype=float),
+            fit_result=fit_result,
+            config=dict(getattr(expt, "cfg", {})),
+            interrupted=False,
+            avg_count=avg_count,
+            x_name="# shot",
+            x_unit="#",
+            y_name="State",
+            y_unit="",
+        )
 
     @staticmethod
     def _dict_to_experiment_data(expt, data: dict, avg_count: int):
