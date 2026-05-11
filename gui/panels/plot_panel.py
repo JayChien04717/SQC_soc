@@ -9,8 +9,17 @@ from PySide6.QtCore import Qt
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavToolbar
 from matplotlib.figure import Figure
+from matplotlib import cm, colors as mcolors
 
 from gui.theme import BG0, BG1, BG3, ACCENT, TEXT, TEXT_DIM
+
+
+ALLXY_GATE_LABELS = [
+    "I,I", "X,X", "Y,Y", "X,Y", "Y,X",
+    "X/2,I", "Y/2,I", "X/2,Y/2", "Y/2,X/2", "X/2,Y",
+    "Y/2,X", "X,Y/2", "Y,X/2", "X/2,X", "X,X/2",
+    "Y/2,Y", "Y,Y/2", "X,I", "Y,I", "X/2,X/2", "Y/2,Y/2",
+]
 
 
 class PlotPanel(QWidget):
@@ -20,6 +29,7 @@ class PlotPanel(QWidget):
         super().__init__(parent)
         self._x      = None
         self._iq     = None
+        self._y_axis = None
         self._xlabel = ""
         self._title  = ""
         self._experiment_type = ""
@@ -86,6 +96,7 @@ class PlotPanel(QWidget):
         """Refresh plot with new IQ data."""
         self._x      = np.asarray(x)
         self._iq     = np.asarray(iq)
+        self._y_axis = None
         self._xlabel = xlabel
         self._title  = title
         self._experiment_type = title
@@ -99,6 +110,7 @@ class PlotPanel(QWidget):
             self._x = np.asarray(result.x_axis)
         if result.raw_iq is not None:
             self._iq = np.asarray(result.raw_iq)
+        self._y_axis = np.asarray(result.y_axis) if getattr(result, "y_axis", None) is not None else None
         self._experiment_type = str(getattr(result, "experiment_type", "") or self._title or "")
         self._replot()
         self._draw_fit(result)
@@ -120,7 +132,7 @@ class PlotPanel(QWidget):
         self.canvas.draw_idle()
 
     def clear(self):
-        self._x = self._iq = None
+        self._x = self._iq = self._y_axis = None
         self._experiment_type = ""
         self._line = self._fit_line = self._mesh = None
         self._fit_text = None
@@ -201,17 +213,18 @@ class PlotPanel(QWidget):
             return
         if getattr(result, "interrupted", False):
             lines.insert(0, f"partial avg: {getattr(result, 'avg_count', 0)}")
-        self._fit_text = self.ax.text(
-            0.02,
-            0.98,
-            "\n".join(lines[:8]),
-            transform=self.ax.transAxes,
-            va="top",
-            ha="left",
-            fontsize=9,
-            color=TEXT,
-            bbox={"boxstyle": "round,pad=0.35", "facecolor": BG0, "edgecolor": BG3, "alpha": 0.88},
-        )
+        text_kwargs = {
+            "transform": self.ax.transAxes,
+            "va": "top",
+            "ha": "left",
+            "fontsize": 9,
+            "color": TEXT,
+            "bbox": {"boxstyle": "round,pad=0.35", "facecolor": BG0, "edgecolor": BG3, "alpha": 0.88},
+        }
+        if getattr(self.ax, "name", "") == "3d":
+            self._fit_text = self.ax.text2D(0.02, 0.98, "\n".join(lines[:8]), **text_kwargs)
+        else:
+            self._fit_text = self.ax.text(0.02, 0.98, "\n".join(lines[:8]), **text_kwargs)
 
     def export_figure(self):
         path, filt = QFileDialog.getSaveFileName(
@@ -258,7 +271,40 @@ class PlotPanel(QWidget):
         context = str(experiment_type or "").lower()
         return "tomo" in context and arr.ndim == 1 and arr.shape[0] == 3
 
+    @staticmethod
+    def _looks_like_allxy(iq, experiment_type=""):
+        arr = np.asarray(iq)
+        context = str(experiment_type or "").lower()
+        return "allxy" in context and arr.ndim == 1 and arr.shape[0] == len(ALLXY_GATE_LABELS)
+
+    def _plot_allxy(self):
+        iq = np.asarray(self._iq)
+        y = np.real(iq) if self.mode_combo.currentText() == "avgi" else np.abs(iq)
+        x = np.arange(len(y), dtype=float)
+        if y[0] < y[-1]:
+            ref = [np.nanmin(y)] * 5 + [(np.nanmax(y) + np.nanmin(y)) / 2] * 12 + [np.nanmax(y)] * 4
+        else:
+            ref = [np.nanmax(y)] * 5 + [(np.nanmax(y) + np.nanmin(y)) / 2] * 12 + [np.nanmin(y)] * 4
+        if len(ref) != len(y):
+            ref = ref[:len(y)] if len(ref) > len(y) else ref + [ref[-1]] * (len(y) - len(ref))
+
+        self._reset_single_axis()
+        self._line, = self.ax.plot(x, y, "o", color=ACCENT, markersize=4, label="data")
+        self.ax.plot(x, ref, "-", color="#f2cc60", linewidth=1.8, label="ideal")
+        self.ax.set_xticks(x)
+        self.ax.set_xticklabels(ALLXY_GATE_LABELS, rotation=55, ha="right", fontsize=8)
+        self.ax.set_xlabel("Gate set")
+        self.ax.set_ylabel("I (ADC)" if self.mode_combo.currentText() == "avgi" else "|IQ| (ADC)")
+        self.ax.set_title(self._title or "AllXY", fontsize=9)
+        self.ax.grid(True, color=BG3, alpha=0.35, linewidth=0.6)
+        self.ax.legend(loc="best", facecolor=BG1, edgecolor=BG3, labelcolor=TEXT_DIM)
+        self.fig.tight_layout()
+        self.canvas.draw_idle()
+
     def _plot_tomography_expectations(self):
+        if self._y_axis is not None and np.asarray(self._y_axis).shape == (2, 2):
+            self._plot_tomography_density_matrix()
+            return
         vals = np.asarray(self._iq, dtype=float)
         self._reset_single_axis()
         labels = ["<X>", "<Y>", "<Z>"]
@@ -273,6 +319,51 @@ class PlotPanel(QWidget):
             va = "bottom" if val >= 0 else "top"
             offset = 0.04 if val >= 0 else -0.04
             self.ax.text(idx, val + offset, f"{val:.3f}", ha="center", va=va, color=TEXT, fontsize=9)
+        self.canvas.draw_idle()
+
+    def _plot_tomography_density_matrix(self):
+        rho = np.asarray(self._y_axis, dtype=np.complex128)
+        magnitude = np.abs(rho).ravel()
+        phase = np.angle(rho).ravel()
+        xpos, ypos = np.meshgrid(np.arange(2), np.arange(2), indexing="xy")
+        xpos = xpos.ravel()
+        ypos = ypos.ravel()
+        zpos = np.zeros_like(xpos, dtype=float)
+        dx = dy = np.full_like(xpos, 0.58, dtype=float)
+        norm = mcolors.Normalize(vmin=-np.pi, vmax=np.pi)
+        facecolors = cm.twilight(norm(phase))
+
+        self.fig.clear()
+        self.fig.patch.set_facecolor(BG0)
+        self.ax = self.fig.add_subplot(111, projection="3d")
+        self._single_shot_axes = None
+        self._line = self._mesh = self._fit_line = self._fit_text = None
+        self._cbar = None
+        self.ax.set_facecolor(BG1)
+        self.ax.bar3d(xpos, ypos, zpos, dx, dy, magnitude, color=facecolors, shade=True, alpha=0.92)
+        self.ax.set_zlim(-1.0, 1.0)
+        self.ax.set_xticks([0.29, 1.29])
+        self.ax.set_xticklabels(["|0>", "|1>"])
+        self.ax.set_yticks([0.29, 1.29])
+        self.ax.set_yticklabels(["<0|", "<1|"])
+        self.ax.set_zlabel("|rho|")
+        self.ax.set_title(self._title or "State Tomography", fontsize=9, color=TEXT)
+        self.ax.tick_params(colors=TEXT_DIM, labelsize=8)
+        self.ax.xaxis.label.set_color(TEXT_DIM)
+        self.ax.yaxis.label.set_color(TEXT_DIM)
+        self.ax.zaxis.label.set_color(TEXT_DIM)
+        for axis in (self.ax.xaxis, self.ax.yaxis, self.ax.zaxis):
+            axis.pane.set_facecolor(BG1)
+            axis.pane.set_edgecolor(BG3)
+        mapper = cm.ScalarMappable(norm=norm, cmap=cm.twilight)
+        mapper.set_array([])
+        self._cbar = self.fig.colorbar(mapper, ax=self.ax, pad=0.08, shrink=0.72)
+        self._cbar.set_label("phase (rad)", color=TEXT_DIM)
+        self._cbar.ax.tick_params(colors=TEXT_DIM, labelsize=8)
+        self._cbar.outline.set_edgecolor(BG3)
+        for x, y, z, mag, ph in zip(xpos, ypos, magnitude, magnitude, phase):
+            self.ax.text(x + 0.29, y + 0.29, z + 0.04, f"{mag:.2f}\n{ph:.2f}", color=TEXT, ha="center", fontsize=8)
+        self.fig.tight_layout()
         self.canvas.draw_idle()
 
     def _plot_singleshot_histograms(self):
@@ -370,6 +461,9 @@ class PlotPanel(QWidget):
 
     def _replot(self):
         if self._x is None or self._iq is None:
+            return
+        if self._looks_like_allxy(self._iq, self._experiment_type or self._title):
+            self._plot_allxy()
             return
         if self._looks_like_tomography(self._iq, self._experiment_type or self._title):
             self._plot_tomography_expectations()
