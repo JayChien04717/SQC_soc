@@ -128,7 +128,7 @@ class PlotPanel(QWidget):
 
     def _draw_fit(self, result):
         self.clear_fit()
-        if self._x is None or self._iq is None or getattr(result, "fit_params", None) is None:
+        if self._x is None or self._iq is None:
             self._draw_fit_text(result)
             return
         if np.asarray(self._iq).ndim > 1:
@@ -156,10 +156,16 @@ class PlotPanel(QWidget):
 
     def _fit_curve(self, result):
         x = np.asarray(self._x, dtype=float)
-        p = np.asarray(result.fit_params, dtype=float)
         fit_result = getattr(result, "fit_result", {}) or {}
         try:
-            from QickworkspaceV2.tools.fitting import decaysin, expfunc, lorfunc, rb_func
+            from QickworkspaceV2.tools.fitting import decaysin, expfunc, fitlor, lorfunc, rb_func
+            fit_params = getattr(result, "fit_params", None)
+            if fit_params is None and any(k in fit_result for k in ("f_res[MHz]", "kappa_MHz")):
+                p, _, _ = fitlor(x, np.abs(np.asarray(self._iq)))
+                return lorfunc(x, *p)
+            if fit_params is None:
+                return None
+            p = np.asarray(fit_params, dtype=float)
             if len(p) == 4 and (
                 "f0_MHz" in fit_result
                 or "f_res[MHz]" in fit_result
