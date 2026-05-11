@@ -210,7 +210,7 @@ class ConfigViewer(QWidget):
         self.text = QTextEdit()
         self.text.setReadOnly(True)
         self.text.setMinimumWidth(320)
-        self.text.setMinimumHeight(260)
+        self.text.setMinimumHeight(180)
 
         self.tabs.addTab(self.table, "Editable Config")
         self.tabs.addTab(self.text, "Raw JSON")
@@ -569,7 +569,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._debug = debug
         self.setWindowTitle("QickworkspaceV2 Control Panel" + (" [SIMULATION]" if debug else ""))
-        self.resize(1280, 760)
+        self.resize(1152, 648)
         self._worker: AcquireWorker | None = None
         self._config: dict = {}
         self._config_list: list = []

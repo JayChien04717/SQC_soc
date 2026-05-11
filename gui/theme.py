@@ -269,33 +269,39 @@ QTextEdit {{
 
 /* ── Scroll Bar ──────────────────────────────────────────────────────── */
 QScrollBar:vertical {{
-    background-color: #ffffff;
-    width: 10px;
-    border-radius: 5px;
+    background-color: #101820;
+    width: 12px;
+    border: 1px solid #3d444d;
+    border-radius: 6px;
 }}
 QScrollBar::handle:vertical {{
-    background-color: #d0d7de;
+    background-color: #00d4ff;
+    border: 1px solid #e6f7ff;
     border-radius: 5px;
-    min-height: 20px;
+    min-height: 28px;
 }}
 QScrollBar::handle:vertical:hover {{
-    background-color: #ffffff;
+    background-color: #f2cc60;
+    border-color: #fff4c2;
 }}
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
     height: 0;
 }}
 QScrollBar:horizontal {{
-    background-color: #ffffff;
-    height: 10px;
-    border-radius: 5px;
+    background-color: #101820;
+    height: 12px;
+    border: 1px solid #3d444d;
+    border-radius: 6px;
 }}
 QScrollBar::handle:horizontal {{
-    background-color: #d0d7de;
+    background-color: #00d4ff;
+    border: 1px solid #e6f7ff;
     border-radius: 5px;
-    min-width: 20px;
+    min-width: 28px;
 }}
 QScrollBar::handle:horizontal:hover {{
-    background-color: #ffffff;
+    background-color: #f2cc60;
+    border-color: #fff4c2;
 }}
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
     width: 0;
