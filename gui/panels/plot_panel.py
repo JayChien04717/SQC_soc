@@ -22,11 +22,13 @@ class PlotPanel(QWidget):
         self._iq     = None
         self._xlabel = ""
         self._title  = ""
+        self._experiment_type = ""
         self._line   = None   # reused Line2D for liveplot
         self._fit_line = None
         self._fit_text = None
         self._mesh   = None   # reused QuadMesh for 2D liveplot
         self._cbar   = None   # colorbar reference for 2D
+        self._single_shot_axes = None
         self._build_ui()
 
     # ── UI ────────────────────────────────────────────────────────────────────
@@ -86,6 +88,7 @@ class PlotPanel(QWidget):
         self._iq     = np.asarray(iq)
         self._xlabel = xlabel
         self._title  = title
+        self._experiment_type = title
         self._replot()
 
     def set_result(self, result):
@@ -96,6 +99,7 @@ class PlotPanel(QWidget):
             self._x = np.asarray(result.x_axis)
         if result.raw_iq is not None:
             self._iq = np.asarray(result.raw_iq)
+        self._experiment_type = str(getattr(result, "experiment_type", "") or self._title or "")
         self._replot()
         self._draw_fit(result)
 
@@ -117,22 +121,21 @@ class PlotPanel(QWidget):
 
     def clear(self):
         self._x = self._iq = None
+        self._experiment_type = ""
         self._line = self._fit_line = self._mesh = None
         self._fit_text = None
-        if self._cbar is not None:
-            self._cbar.remove()
-            self._cbar = None
-        self.ax.cla()
-        self._style_ax(self.ax)
+        self._reset_single_axis()
         self.canvas.draw_idle()
 
     def _draw_fit(self, result):
         self.clear_fit()
         if self._x is None or self._iq is None:
             self._draw_fit_text(result)
+            self.canvas.draw_idle()
             return
         if np.asarray(self._iq).ndim > 1:
             self._draw_fit_text(result)
+            self.canvas.draw_idle()
             return
 
         y_fit = self._fit_curve(result)
@@ -224,9 +227,131 @@ class PlotPanel(QWidget):
         self._line = self._mesh = None
         self._replot()
 
+    def _reset_single_axis(self):
+        self.fig.clear()
+        self.fig.patch.set_facecolor(BG0)
+        self.ax = self.fig.add_subplot(111)
+        self._style_ax(self.ax)
+        self._cbar = None
+        self._single_shot_axes = None
+
+    def _ensure_single_axis(self):
+        if self._single_shot_axes is not None or self.ax not in self.fig.axes:
+            self._reset_single_axis()
+
+    @staticmethod
+    def _looks_like_singleshot_iq(iq, experiment_type=""):
+        arr = np.asarray(iq)
+        context = str(experiment_type or "").lower()
+        return (
+            "single" in context and
+            np.iscomplexobj(arr)
+            and arr.ndim == 2
+            and 1 < arr.shape[0] <= 4
+            and arr.shape[1] >= 10
+            and arr.shape[0] <= arr.shape[1]
+        )
+
+    def _plot_singleshot_histograms(self):
+        iq = np.asarray(self._iq, dtype=np.complex128)
+        n_states = iq.shape[0]
+        labels = ["g", "e", "f", "h"][:n_states]
+        colors = [ACCENT, "#f2cc60", "#ff7b72", "#a371f7"][:n_states]
+
+        centers = np.nanmean(iq, axis=1)
+        delta = centers[1] - centers[0] if n_states >= 2 else 0.0
+        angle = np.angle(delta) if np.isfinite(delta) and abs(delta) > 0 else 0.0
+        rotated = iq * np.exp(-1j * angle)
+
+        self.fig.clear()
+        self.fig.patch.set_facecolor(BG0)
+        ax_iq = self.fig.add_subplot(2, 1, 1)
+        ax_i = self.fig.add_subplot(2, 1, 2)
+        self.ax = ax_iq
+        self._single_shot_axes = (ax_iq, ax_i)
+        self._line = self._mesh = self._fit_line = self._fit_text = None
+        self._cbar = None
+        self._style_ax(ax_iq)
+        self._style_ax(ax_i)
+
+        flat_iq = iq.ravel()
+        flat_iq = flat_iq[np.isfinite(flat_iq.real) & np.isfinite(flat_iq.imag)]
+        if flat_iq.size:
+            bins_2d = min(140, max(40, int(np.sqrt(flat_iq.size) * 1.5)))
+            _, _, _, image = ax_iq.hist2d(
+                flat_iq.real,
+                flat_iq.imag,
+                bins=bins_2d,
+                cmap="inferno",
+            )
+            self._cbar = self.fig.colorbar(image, ax=ax_iq, pad=0.02)
+            self._cbar.ax.tick_params(colors=TEXT_DIM, labelsize=8)
+            self._cbar.outline.set_edgecolor(BG3)
+
+        for idx, center in enumerate(centers):
+            if not (np.isfinite(center.real) and np.isfinite(center.imag)):
+                continue
+            ax_iq.plot(
+                center.real,
+                center.imag,
+                "o",
+                color=colors[idx],
+                markersize=5,
+                markeredgecolor=BG0,
+                markeredgewidth=0.8,
+            )
+            ax_iq.text(
+                center.real,
+                center.imag,
+                f" {labels[idx]}",
+                color=colors[idx],
+                fontsize=9,
+                va="center",
+                ha="left",
+            )
+
+        projection = rotated.real
+        finite_projection = projection[np.isfinite(projection)]
+        if finite_projection.size:
+            lo, hi = np.nanpercentile(finite_projection, [0.5, 99.5])
+            if not np.isfinite(lo) or not np.isfinite(hi) or lo == hi:
+                center = float(np.nanmean(finite_projection))
+                span = max(abs(center) * 0.1, 1.0)
+                lo, hi = center - span, center + span
+            bins_1d = np.linspace(lo, hi, min(90, max(35, int(np.sqrt(finite_projection.size)))))
+            for idx in range(n_states):
+                vals = projection[idx]
+                vals = vals[np.isfinite(vals)]
+                ax_i.hist(
+                    vals,
+                    bins=bins_1d,
+                    alpha=0.45,
+                    color=colors[idx],
+                    label=labels[idx],
+                    histtype="stepfilled",
+                    edgecolor=colors[idx],
+                    linewidth=1.1,
+                )
+                if vals.size:
+                    ax_i.axvline(np.nanmean(vals), color=colors[idx], linewidth=1.2, alpha=0.95)
+            ax_i.legend(loc="best", facecolor=BG1, edgecolor=BG3, labelcolor=TEXT_DIM)
+
+        ax_iq.set_xlabel("I (ADC)")
+        ax_iq.set_ylabel("Q (ADC)")
+        ax_iq.set_title(f"{self._title or 'SingleShot'} - IQ 2D histogram", fontsize=9)
+        ax_i.set_xlabel("Rotated I (ADC)")
+        ax_i.set_ylabel("Counts")
+        ax_i.set_title(f"I-axis projection after rotation ({np.degrees(angle):.1f} deg)", fontsize=9)
+        self.fig.tight_layout()
+        self.canvas.draw_idle()
+
     def _replot(self):
         if self._x is None or self._iq is None:
             return
+        if self._looks_like_singleshot_iq(self._iq, self._experiment_type or self._title):
+            self._plot_singleshot_histograms()
+            return
+        self._ensure_single_axis()
 
         mode = self.mode_combo.currentText()
         ylabel_map = {

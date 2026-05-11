@@ -621,7 +621,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._debug = debug
         self.setWindowTitle("QickworkspaceV2 Control Panel" + (" [SIMULATION]" if debug else ""))
-        self.resize(1152, 648)
+        self.resize(1024, 576)
         self._worker: AcquireWorker | None = None
         self._config: dict = {}
         self._config_list: list = []
@@ -1063,6 +1063,8 @@ class MainWindow(QMainWindow):
         state = settings.value("windowState")
         if geom:
             self.restoreGeometry(geom)
+            if not self.isMaximized() and (self.width() > 1024 or self.height() > 576):
+                self.resize(min(self.width(), 1024), min(self.height(), 576))
         if state:
             self.restoreState(state)
 
