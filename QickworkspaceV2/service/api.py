@@ -100,34 +100,8 @@ def create_app(cal_store=None, config_all=None) -> "FastAPI":
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _resolve_experiment(exp_type: str):
-        from ..experiments import (
-            ResonatorSpec, QubitSpec, TimeRabi, PowerRabi,
-            Ramsey, SpinEcho, T1, ResonatorSpec_ef,
-            QubitSpecEf, PowerRabiEf, RamseyEf, T1Ef,
-            AllXY, RandomizedBenchmarking, Tomography, TOF,
-        )
-        registry = {
-            "res_spec":       ResonatorSpec,
-            "qubit_spec":     QubitSpec,
-            "time_rabi":      TimeRabi,
-            "power_rabi":     PowerRabi,
-            "ramsey":         Ramsey,
-            "spin_echo":      SpinEcho,
-            "t1":             T1,
-            "res_spec_ef":    ResonatorSpec_ef,
-            "qubit_spec_ef":  QubitSpecEf,
-            "power_rabi_ef":  PowerRabiEf,
-            "ramsey_ef":      RamseyEf,
-            "t1_ef":          T1Ef,
-            "allxy":          AllXY,
-            "rb":             RandomizedBenchmarking,
-            "tomography":     Tomography,
-            "tof":            TOF,
-        }
-        cls = registry.get(exp_type)
-        if cls is None:
-            raise ValueError(f"Unknown experiment type: {exp_type!r}. Valid: {list(registry.keys())}")
-        return cls
+        from ..core.experiment_registry import resolve_experiment_class
+        return resolve_experiment_class(exp_type)
 
     def _run_job(job_id: str, exp_type: str, cfg: dict, py_avg: int, kwargs: dict):
         _set_job(job_id, status="running", started_at=datetime.now().isoformat())
@@ -183,6 +157,12 @@ def create_app(cal_store=None, config_all=None) -> "FastAPI":
                  "status": j["status"], "created_at": j["created_at"]}
                 for j in _JOBS.values()
             ]
+
+    @app.get("/experiments/schema")
+    async def get_experiment_schema():
+        """Return experiment catalog for GUI/web clients."""
+        from ..core.experiment_registry import experiment_schema
+        return experiment_schema()
 
     # ── Calibration endpoints ─────────────────────────────────────────────────
 

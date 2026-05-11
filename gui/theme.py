@@ -1,5 +1,5 @@
 """
-Dark futuristic theme for qick_workspace GUI.
+Dark theme for QickworkspaceV2 GUI.
 Apply with:  app.setStyleSheet(DARK_QSS)
 """
 

@@ -10,9 +10,9 @@ from PySide6.QtCore import Qt, Signal
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 
-# Lazy import so GUI loads even without qick_workspace on path
+# Lazy import so GUI loads even without the data helpers on path.
 try:
-    from qick_workspace.tools.data_manager import list_data_files, load_data
+    from QickworkspaceV2.tools.data_manager import list_data_files, load_data
     _HAS_DM = True
 except ImportError:
     _HAS_DM = False

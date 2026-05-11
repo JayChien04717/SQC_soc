@@ -26,7 +26,7 @@ from matplotlib.backends.backend_qtagg import NavigationToolbar2QT as NavToolbar
 from matplotlib.figure import Figure
 
 try:
-    from qick_workspace.tools.data_manager import load_data, list_data_files
+    from QickworkspaceV2.tools.data_manager import load_data, list_data_files
     _HAS_DM = True
 except ImportError:
     _HAS_DM = False
@@ -40,7 +40,7 @@ class DataBrowserWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Data Browser  ·  qick_workspace")
+        self.setWindowTitle("Data Browser - QickworkspaceV2")
         self.resize(1400, 900)
         self._current_data = None
         self._current_path = None
@@ -269,13 +269,13 @@ class DataBrowserWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+S"), self, self._export_figure)
 
     def _restore_geometry(self):
-        s = QSettings("qick_workspace", "DataBrowser")
+        s = QSettings("QickworkspaceV2", "DataBrowser")
         geom = s.value("geometry")
         if geom:
             self.restoreGeometry(geom)
 
     def closeEvent(self, event):
-        s = QSettings("qick_workspace", "DataBrowser")
+        s = QSettings("QickworkspaceV2", "DataBrowser")
         s.setValue("geometry", self.saveGeometry())
         super().closeEvent(event)
 
