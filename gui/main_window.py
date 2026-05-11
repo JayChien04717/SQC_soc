@@ -534,6 +534,8 @@ class AcquireWorker(QThread):
         self.result_ready.emit(result)
 
     def _run_special(self):
+        from QickworkspaceV2.core.experiment_data import ExperimentData
+
         expt = self._make_expt()
         py_avg = int(self.params.get("py_avg", self.params.get("shots", 10)))
         cp = self.class_path
@@ -558,10 +560,60 @@ class AcquireWorker(QThread):
             result = expt.run(py_avg, prep_pulse_name=self.params.get("prep_pulse_name"))
         else:
             result = expt.run(py_avg)
+        if isinstance(result, dict):
+            result = self._dict_to_experiment_data(expt, result, py_avg)
         result.interrupted = result.interrupted or self._stop_requested
         if result.raw_iq is not None and result.x_axis is not None:
-            self.data_ready.emit(result.x_axis, result.raw_iq, expt.X_LABEL, expt.TITLE_PREFIX)
+            self.data_ready.emit(
+                result.x_axis,
+                result.raw_iq,
+                getattr(expt, "X_LABEL", "Index"),
+                getattr(expt, "TITLE_PREFIX", result.experiment_type),
+            )
         self.result_ready.emit(result)
+
+    @staticmethod
+    def _dict_to_experiment_data(expt, data: dict, avg_count: int):
+        from QickworkspaceV2.core.experiment_data import ExperimentData
+
+        raw_iq = None
+        x_axis = None
+        y_axis = None
+        fit_result = {}
+        if {"Ig", "Qg", "Ie", "Qe"}.issubset(data):
+            traces = [
+                np.asarray(data["Ig"]) + 1j * np.asarray(data["Qg"]),
+                np.asarray(data["Ie"]) + 1j * np.asarray(data["Qe"]),
+            ]
+            states = [0, 1]
+            if {"If", "Qf"}.issubset(data):
+                traces.append(np.asarray(data["If"]) + 1j * np.asarray(data["Qf"]))
+                states.append(2)
+            raw_iq = np.vstack(traces)
+            x_axis = np.arange(raw_iq.shape[-1], dtype=float)
+            y_axis = np.asarray(states, dtype=float)
+            fit_result = {"shots": (int(raw_iq.shape[-1]), None), "states": (len(states), None)}
+        else:
+            numeric = {
+                key: value for key, value in data.items()
+                if isinstance(value, (int, float, np.number))
+            }
+            fit_result = {key: (float(value), None) for key, value in numeric.items()}
+
+        return ExperimentData(
+            experiment_type=getattr(expt, "EXPT_NAME", expt.__class__.__name__),
+            raw_iq=raw_iq,
+            x_axis=x_axis,
+            y_axis=y_axis,
+            fit_result=fit_result,
+            config=dict(getattr(expt, "cfg", {})),
+            interrupted=False,
+            avg_count=avg_count,
+            x_name="# shot" if raw_iq is not None else "",
+            x_unit="#" if raw_iq is not None else "",
+            y_name="State" if raw_iq is not None else "",
+            y_unit="",
+        )
 
 
 class MainWindow(QMainWindow):

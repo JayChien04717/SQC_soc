@@ -243,11 +243,16 @@ class PlotPanel(QWidget):
         }
         y = extractors[mode](self._iq)
         is_2d = y.ndim > 1
+        x_plot = self._x
+        if not is_2d and x_plot.shape[0] != y.shape[0]:
+            x_plot = np.arange(y.shape[0], dtype=float)
+        elif is_2d and x_plot.shape[0] != y.shape[-1]:
+            x_plot = np.arange(y.shape[-1], dtype=float)
 
         # Determine if we can update in-place (same dimensionality and shape)
         can_update = (
             (not is_2d and self._line is not None and
-             self._line.get_xdata().shape == self._x.shape)
+             self._line.get_xdata().shape == x_plot.shape)
             or
             (is_2d and self._mesh is not None and
              self._mesh.get_array().shape == y.ravel().shape)
@@ -274,13 +279,13 @@ class PlotPanel(QWidget):
 
             if is_2d:
                 self._mesh = self.ax.pcolormesh(
-                    self._x, np.arange(y.shape[0]), y,
+                    x_plot, np.arange(y.shape[0]), y,
                     cmap="RdBu_r", shading="auto",
                 )
                 self._cbar = self.fig.colorbar(self._mesh, ax=self.ax, pad=0.02)
             else:
                 (self._line,) = self.ax.plot(
-                    self._x, y, ".-", color=ACCENT, markersize=3, linewidth=1.2,
+                    x_plot, y, ".-", color=ACCENT, markersize=3, linewidth=1.2,
                 )
                 if self.autoscale_cb.isChecked():
                     self.ax.relim()
