@@ -1,0 +1,29 @@
+# Core numerical stack
+numpy
+scipy
+matplotlib
+h5py
+PyYAML
+addict
+tqdm
+IPython
+
+# QICK hardware connection
+qick
+Pyro4
+
+# GUI
+PySide6
+
+# API service
+fastapi
+uvicorn
+pydantic
+
+# Analysis and optimization helpers
+scikit-learn
+xarray
+qutip
+
+# Instrument control
+pyvisa

@@ -619,10 +619,7 @@ class MainWindow(QMainWindow):
         qubit_names: list = []
         config_list: list = []
         if p.suffix == ".py":
-            import importlib.util
-            spec = importlib.util.spec_from_file_location("_gui_cfg", p)
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)
+            mod = self._load_python_config_module(p)
             cfg_list = getattr(mod, "config_list", None)
             if isinstance(cfg_list, list):
                 config_list = cfg_list
@@ -641,6 +638,35 @@ class MainWindow(QMainWindow):
             qubit_names = [item.get("name", f"Q{i}") for i, item in enumerate(data) if isinstance(item, dict)]
             return {}, qubit_names, config_list
         return data, qubit_names, config_list
+
+    @staticmethod
+    def _load_python_config_module(path: Path):
+        """Load Python configs with package context when possible."""
+        import importlib.util
+
+        resolved = path.resolve()
+        repo_root = Path.cwd().resolve()
+
+        try:
+            rel = resolved.relative_to(repo_root)
+        except ValueError:
+            rel = None
+
+        if rel is not None and rel.suffix == ".py":
+            parts = rel.with_suffix("").parts
+            if parts and all(part.isidentifier() for part in parts):
+                module_name = ".".join(parts)
+                if str(repo_root) not in sys.path:
+                    sys.path.insert(0, str(repo_root))
+                module = importlib.import_module(module_name)
+                return importlib.reload(module)
+
+        spec = importlib.util.spec_from_file_location("_gui_cfg", resolved)
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Cannot load config module from {resolved}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
 
     def _auto_connect_mock(self):
         from gui.mock.hardware import MockSoc, MockSoccfg
